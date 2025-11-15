@@ -1,0 +1,58 @@
+# Screen 1: Scan loader
+scan_loader: nifti
+
+# Screen 2: Scan inputs
+scan_path: PATH/TO/YOUR/SCAN.nii.gz
+scan_loader_kwargs:
+  transpose: False
+
+# Step 3: Image preprocessing
+scan_preproc_funcs:
+  - resample
+scan_preproc_kwargs:
+  target_vox_size: [1., 1., 1.]  # mm
+  interp: linear
+
+# Screen 4: Segmentation (either drawing or saved)
+seg_path: PATH/TO/YOUR/SEGMENTATION.nii.gz
+seg_loader: nifti
+seg_loader_kwargs:
+  assert_scan: False
+  assert_phantom: False
+
+# Step 5: Segmentation preprocessing
+seg_preproc_funcs: 
+  - resample
+seg_preproc_kwargs:
+  target_vox_size: [1., 1., 1.]  # mm
+  interp: nearest
+
+# Screen 6: Analysis
+analysis_type: curves_paramap
+analysis_kwargs:
+  curves_output_path: 
+  ax_vox_ovrlp: 50  # %
+  sag_vox_ovrlp: 50  # %
+  cor_vox_ovrlp: 50  # %
+  ax_vox_len: 3    # mm
+  sag_vox_len: 3    # mm
+  cor_vox_len: 3    # mm
+analysis_funcs:
+  - tic
+
+# Step 7: Curve quantification
+curve_quant_output_path: 
+curve_quant_funcs:
+  - lognormal_fit_select
+curve_quant_kwargs:
+  curves_to_fit:
+    - TIC
+
+# Step 8: Visualization
+visualization_type: paramap
+visualization_params: # Empty covers all parameters
+custom_visualization_funcs: # N/A
+  - plot_tics
+visualization_kwargs:
+  paramap_folder_path: paramaps_LOGNORMAL
+  hide_all_visualizations: False

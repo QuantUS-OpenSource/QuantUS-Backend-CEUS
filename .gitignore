@@ -1,0 +1,10 @@
+__pycache__/
+.venv*/
+build/
+dist/
+*.egg-info/
+fixed_wheels/
+.vscode/
+.DS_Store
+*.so
+/**/*_ui.py

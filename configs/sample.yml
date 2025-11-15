@@ -1,0 +1,35 @@
+# Screen 1: Scan loader
+scan_loader: custom_dicom
+
+# Screen 2: Scan inputs
+scan_path: PATH/TO/YOUR/SCAN_DIRECTORY/
+scan_loader_kwargs:
+  transpose: False
+
+# Step 3: Image preprocessing (None for 2D)
+scan_preproc_funcs:
+scan_preproc_kwargs:
+
+# Screen 4: Segmentation (either drawing or saved)
+seg_path: PATH/TO/YOUR/SEGMENTATION.nii.gz
+seg_loader: nifti
+seg_loader_kwargs:
+
+# Step 5: Segmentation preprocessing
+seg_preproc_funcs: 
+seg_preproc_kwargs:
+
+# Step 6: Curve definition and extraction
+analysis_type: curves
+analysis_kwargs:
+  curves_output_path: CURVES_DEMO.csv
+  binwidth: 25 
+  min_intensity: 0
+  pyradiomics_config_paths:
+    - PATH/TO/YOUR/PYRADIOMICS_CONFIG.yml
+analysis_funcs:
+  - tic
+  - pyradiomics
+
+# Step 7: Curve quantification
+# Can be blank. See other sample config for sample quantification functions.
