@@ -206,3 +206,68 @@ def mask_t0_map(t0_map, seg_mask):
     # Set pixels outside ROI to NaN (will appear transparent in matplotlib)
     masked_t0_map[~roi_mask] = np.nan
     return masked_t0_map
+
+def generate_peak_enhancement_map(pixel_data, seg_mask, baseline_frames=None, start_frame=50, end_frame=250):
+    """
+    Generate peak enhancement amplitude map showing maximum intensity change.
+
+    For each pixel, computes: max(intensity during enhancement) - baseline
+
+    Parameters
+    ----------
+    pixel_data : numpy.ndarray
+        Image data with shape (n_frames, height, width)
+    seg_mask : numpy.ndarray
+        Binary segmentation mask with shape (height, width) or per-frame mask
+    baseline_frames : tuple or None, optional
+        (start, end) frame indices for baseline calculation.
+        If None, uses first 10% of start_frame
+    start_frame : int, optional
+        First frame to search for peak (default: 50)
+    end_frame : int, optional
+        Last frame to search for peak (default: 250)
+
+    Returns
+    -------
+    peak_map : numpy.ndarray
+        Map with shape (height, width) where each pixel value represents
+        the peak enhancement amplitude above baseline.
+        Pixels outside ROI will have value 0.
+
+    Examples
+    --------
+    >>> peak_map = generate_peak_enhancement_map(
+    ...     image_data.pixel_data.transpose(2, 0, 1),
+    ...     seg_data.seg_mask,
+    ...     start_frame=50, end_frame=250
+    ... )
+    """
+    n_frames, height, width = pixel_data.shape
+
+    # Validate frame range
+    if end_frame > n_frames:
+        end_frame = n_frames
+
+    # Calculate baseline
+    if baseline_frames is None:
+        baseline_end = max(1, start_frame // 10)
+        baseline_frames = (0, baseline_end)
+
+    baseline_start, baseline_end = baseline_frames
+    baseline = np.mean(pixel_data[baseline_start:baseline_end, :, :], axis=0)
+
+    # Get ROI mask
+    _, roi_mask = _normalize_seg_mask(seg_mask, height, width, n_frames=None)
+
+    # Find peak enhancement in each pixel
+    peak_map = np.zeros((height, width), dtype=np.float32)
+
+    for y in range(height):
+        for x in range(width):
+            if roi_mask[y, x]:
+                # Get time series for this pixel
+                time_series = pixel_data[start_frame:end_frame, y, x]
+                # Peak enhancement = max - baseline
+                peak_map[y, x] = np.max(time_series) - baseline[y, x]
+
+    return peak_map
