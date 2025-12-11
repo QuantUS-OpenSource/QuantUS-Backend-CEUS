@@ -22,19 +22,31 @@ class EntryClass(UltrasoundImage):
     
     def __init__(self, scan_path: str, **kwargs):
         super().__init__(scan_path)
-        
+
         # Supported file extensions for this loader
         assert max([scan_path.endswith(x) for x in self.extensions]), f"File must end with {self.extensions}"
-        
+
         img = nib.load(scan_path)
         header = img.header
         pixdim = header.get_zooms()[:3]  # tuple of pixel dimensions
         frame_rate = 1.0 / header.get_zooms()[3] if len(header.get_zooms()) > 3 and header.get_zooms()[3] > 0 else 1 # s
 
-        if kwargs.get('transpose', False):
-            self.pixel_data = np.asarray(img.dataobj, dtype=np.uint8).T
+        # Auto-detect raw linear data from filename (e.g., "_RAW.nii")
+        # Raw data should not be converted to uint8 as it has a larger dynamic range
+        preserve_raw = kwargs.get('preserve_raw', '_RAW' in scan_path)
+
+        if preserve_raw:
+            # Keep original dtype for raw linear data (usually float32 or uint16)
+            if kwargs.get('transpose', False):
+                self.pixel_data = np.asarray(img.dataobj).T
+            else:
+                self.pixel_data = np.asarray(img.dataobj)
         else:
-            self.pixel_data = np.asarray(img.dataobj, dtype=np.uint8)
+            # Convert to uint8 for normalized data
+            if kwargs.get('transpose', False):
+                self.pixel_data = np.asarray(img.dataobj, dtype=np.uint8).T
+            else:
+                self.pixel_data = np.asarray(img.dataobj, dtype=np.uint8)
 
         self.pixdim = pixdim
         self.frame_rate = frame_rate
