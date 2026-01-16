@@ -93,8 +93,9 @@ def generate_t0_map(pixel_data, seg_mask, threshold=150, start_frame=50, end_fra
     -------
     t0_map : numpy.ndarray
         Map with shape (height, width) where each pixel value represents
-        the reverse time index when that pixel first exceeded the threshold.
-        Higher values = earlier activation.
+        the relative frame number (from start_frame) when that pixel first
+        exceeded the threshold. E.g., T0=25 means 25 frames after start_frame.
+        Lower values = earlier arrival, higher values = later arrival.
         Pixels that never exceeded threshold will have value 0.
 
     Examples
@@ -134,13 +135,13 @@ def generate_t0_map(pixel_data, seg_mask, threshold=150, start_frame=50, end_fra
         # Find pixels that just reached min_consecutive_frames AND haven't been assigned yet
         newly_detected = (consecutive_count == min_consecutive_frames) & (t0_map == 0)
 
-        # Assign reverse time index: earlier frames get higher values
-        # Use the frame when it first crossed (i - min_consecutive_frames + 1)
+        # Store the relative frame number (from start_frame) when contrast first arrived
+        # Low values = early arrival, high values = late arrival
         if min_consecutive_frames > 1:
             first_cross_frame = i - min_consecutive_frames + 1
-            t0_map[newly_detected] = end_frame - first_cross_frame
+            t0_map[newly_detected] = first_cross_frame - start_frame
         else:
-            t0_map[newly_detected] = end_frame - i
+            t0_map[newly_detected] = i - start_frame
 
     return t0_map
 
