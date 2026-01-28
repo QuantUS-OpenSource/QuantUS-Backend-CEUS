@@ -31,6 +31,15 @@ def get_scan_loaders() -> dict:
         if str(internal_tul_path) not in sys.path:
             sys.path.append(str(internal_tul_path))
             
+        # Internal modules in CEUS depend on src.full_workflow from engines/ceus/src
+        ceus_src_path = project_root / "engines" / "ceus" / "src"
+        if ceus_src_path.exists() and str(ceus_src_path) not in sys.path:
+            # We add it so 'import src.full_workflow' works if 'src' is a package
+            # OR we add parent of src if it needs 'src.xxx'
+            ceus_engine_root = project_root / "engines" / "ceus"
+            if str(ceus_engine_root) not in sys.path:
+                sys.path.append(str(ceus_engine_root))
+            
         for item in internal_tul_path.iterdir():
             if item.is_file() and not item.name.startswith("_") and item.suffix == ".py":
                 try:
