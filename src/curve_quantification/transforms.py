@@ -30,13 +30,17 @@ def fit_lognormal_curve(time, curve):
     sigma_guess = 0.5
     t0_guess = time[np.argmax(curve)] * 0.15
 
+    # Define physically reasonable bounds to prevent parameter explosion
+    mu_max = np.log(time[-1]) if time[-1] > 0 else 10.0
+    auc_max = (np.sum(curve) * (time[1] - time[0])) * 10.0  # 10x the initial guess
+
     try:
         params, _ = curve_fit(
             bolus_lognormal,
             time,
             curve,
             p0=(auc_guess, mu_guess, sigma_guess, t0_guess),
-            bounds=([0., 0., 0.01, 0.], [np.inf, np.inf, 5.0, time[-1]]),
+            bounds=([0., 0., 0.01, 0.], [auc_max, mu_max, 5.0, time[-1]]),
             method='trf',
             maxfev=10000  # Increase evaluations
         )
@@ -47,6 +51,11 @@ def fit_lognormal_curve(time, curve):
     auc, mu, sigma, t0 = params
     mtt = np.exp(mu + sigma**2 / 2)
     tp = np.exp(mu - sigma**2)
+
+    # Reject unreasonable fits
+    if tp > time[-1] or mtt > time[-1] * 2 or auc > auc_max:
+        return tuple(np.nan for _ in range(8))
+
     fitted_curve = bolus_lognormal(time, *params)
     pe = np.max(fitted_curve)
     pe_loc = np.argmax(fitted_curve)
