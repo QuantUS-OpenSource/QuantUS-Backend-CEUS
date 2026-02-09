@@ -15,6 +15,7 @@ nest-asyncio==1.6.0
 nibabel==5.3.2
 numpy==2.2.3
 opencv-python-headless>=4.8.0.76
+scikit-image>=0.21.0
 packaging==24.2
 parso==0.8.4
 pandas==2.3.0
