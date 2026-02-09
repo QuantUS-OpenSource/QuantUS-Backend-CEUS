@@ -28,8 +28,8 @@ To install the QuantUS-CEUS framework, follow these steps. Let `$PYTHON310` be t
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/TUL-Dev/QuantUS-Plugins-CEUS
-cd QuantUS-Plugins-CEUS
+git clone https://github.com/QuantUS-OpenSource/QuantUS-Backend-CEUS.git
+cd QuantUS-Backend-CEUS
 ```
 
 2. **Install the package**
