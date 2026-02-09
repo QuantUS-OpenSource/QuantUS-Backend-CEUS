@@ -28,8 +28,8 @@ To install the QuantUS-CEUS framework, follow these steps. Let `$PYTHON310` be t
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/TUL-Dev/QuantUS-Plugins-CEUS
-cd QuantUS-Plugins-CEUS
+git clone https://github.com/QuantUS-OpenSource/QuantUS-Backend-CEUS.git
+cd QuantUS-Backend-CEUS
 ```
 
 2. **Install the package**
@@ -40,8 +40,6 @@ $PYTOHN310 -m virtualenv .venv
 source .venv/bin/activate                           # Unix
 .venv\Scripts\activate                              # Windows (cmd)
 pip install --upgrade pip setuptools wheel
-pip install numpy
-pip install "napari[all]"
 pip install -r requirements.txt
 pip install -e .
 ./saveQt.sh                                         # Unix
