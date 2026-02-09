@@ -23,7 +23,8 @@ def fit_lognormal_curve(time, curve):
     if np.amax(curve) == 0:
         print("Curve is constant, cannot normalize.")
         return tuple(np.nan for _ in range(8))
-    curve = curve / np.amax(curve)  # Normalize
+    normalizer = np.amax(curve)
+    curve = curve / normalizer  # Normalize
 
     auc_guess = np.sum(curve) * (time[1] - time[0])
     mu_guess = np.log(np.argmax(curve))
@@ -33,6 +34,9 @@ def fit_lognormal_curve(time, curve):
     # Define physically reasonable bounds to prevent parameter explosion
     mu_max = np.log(time[-1]) if time[-1] > 0 else 10.0
     auc_max = (np.sum(curve) * (time[1] - time[0])) * 10.0  # 10x the initial guess
+    
+    auc_guess = min(auc_guess, auc_max)
+    mu_guess = min(mu_guess, mu_max)
 
     try:
         params, _ = curve_fit(
@@ -49,6 +53,7 @@ def fit_lognormal_curve(time, curve):
         return tuple(np.nan for _ in range(8))
 
     auc, mu, sigma, t0 = params
+    auc = auc * normalizer  # Scale back to original units
     mtt = np.exp(mu + sigma**2 / 2)
     tp = np.exp(mu - sigma**2)
 
@@ -58,6 +63,7 @@ def fit_lognormal_curve(time, curve):
 
     fitted_curve = bolus_lognormal(time, *params)
     pe = np.max(fitted_curve)
+    pe = pe * normalizer  # Scale back to original units
     pe_loc = np.argmax(fitted_curve)
 
     return auc, pe, tp, mtt, t0, mu, sigma, pe_loc

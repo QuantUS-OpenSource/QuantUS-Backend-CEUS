@@ -40,8 +40,6 @@ $PYTOHN310 -m virtualenv .venv
 source .venv/bin/activate                           # Unix
 .venv\Scripts\activate                              # Windows (cmd)
 pip install --upgrade pip setuptools wheel
-pip install numpy
-pip install "napari[all]"
 pip install -r requirements.txt
 pip install -e .
 ./saveQt.sh                                         # Unix
