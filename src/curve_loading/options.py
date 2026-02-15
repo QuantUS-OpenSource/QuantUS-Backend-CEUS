@@ -1,10 +1,6 @@
 import importlib
 from pathlib import Path
 
-from argparse import ArgumentParser
-
-from .functions import *
-
 def get_curves_loaders() -> dict:
     """Get curves loaders for the CLI.
 

@@ -1,8 +1,6 @@
 from pathlib import Path
 import importlib
 
-from argparse import ArgumentParser
-
 def get_im_preproc_funcs() -> dict:
     """Get preprocessing functions for the CLI.
 

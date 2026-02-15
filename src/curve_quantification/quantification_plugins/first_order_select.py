@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from ...time_series_analysis.curves.framework import CurvesAnalysis
 from ..decorators import required_kwargs
-import _compute_firstorder_stats
+from ._compute_firstorder_stats import _compute_firstorder_stats
 
 @required_kwargs('start_time', 'end_time')
 def first_order_select(analysis_objs: CurvesAnalysis, curves: Dict[str, List[float]], data_dict: dict, **kwargs) -> None:

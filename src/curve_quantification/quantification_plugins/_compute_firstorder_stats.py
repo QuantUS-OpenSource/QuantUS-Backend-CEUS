@@ -14,6 +14,7 @@ def _compute_firstorder_stats(curve: np.ndarray, data_dict: dict, name_prefix: s
     if len(curve) == 0:
         return
 
+    curve = np.array(curve)
     data_dict[f'{name_prefix}Mean{name_suffix}'] = np.mean(curve)
     data_dict[f'{name_prefix}Std{name_suffix}'] = np.std(curve)
     data_dict[f'{name_prefix}Max{name_suffix}'] = np.max(curve)

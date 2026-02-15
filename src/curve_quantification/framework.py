@@ -3,7 +3,7 @@ import pandas as pd
 from typing import Dict, List
 from pathlib import Path
 from tqdm import tqdm
-from options import get_quantification_funcs
+from .options import get_quantification_funcs
 from ..time_series_analysis.curves.framework import CurvesAnalysis
 
 class_name = "CurveQuantifications"

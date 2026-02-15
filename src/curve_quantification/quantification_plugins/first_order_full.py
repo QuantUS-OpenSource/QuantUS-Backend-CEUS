@@ -2,7 +2,7 @@ from typing import Dict, List
 from collections.abc import Iterable
 
 from ...time_series_analysis.curves.framework import CurvesAnalysis
-import _compute_firstorder_stats
+from ._compute_firstorder_stats import _compute_firstorder_stats
 
 def first_order_full(analysis_objs: CurvesAnalysis, curves: Dict[str, List[float]], data_dict: dict, **kwargs) -> None:
     """

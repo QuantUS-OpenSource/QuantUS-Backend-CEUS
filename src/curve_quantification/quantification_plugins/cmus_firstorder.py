@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from ...time_series_analysis.curves.framework import CurvesAnalysis
 from ..decorators import required_kwargs, dependencies
-import _compute_firstorder_stats
+from ._compute_firstorder_stats import _compute_firstorder_stats
 
 @dependencies('lognormal_fit')
 @required_kwargs('tic_name')
