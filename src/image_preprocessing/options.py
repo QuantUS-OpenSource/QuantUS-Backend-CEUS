@@ -1,8 +1,7 @@
 from pathlib import Path
+import importlib
 
 from argparse import ArgumentParser
-
-from .functions import *
 
 def get_im_preproc_funcs() -> dict:
     """Get preprocessing functions for the CLI.
@@ -10,7 +9,12 @@ def get_im_preproc_funcs() -> dict:
     Returns:
         dict: Dictionary of preprocessing functions.
     """
-    functions = {name: obj for name, obj in globals().items() if callable(obj) and obj.__module__ == __package__ + '.functions'}
+    functions = {}
+    for file in (Path(__file__).parent / "image_preprocessors").iterdir():
+        module = importlib.import_module(f'.image_preprocessors.{file.stem}', package=__package__)
+        for name, obj in vars(module).items():
+            if callable(obj) and obj.__module__ == module.__name__:
+                functions[name] = obj
     return functions
 
 def get_required_im_preproc_kwargs(preproc_func_names: list) -> list:

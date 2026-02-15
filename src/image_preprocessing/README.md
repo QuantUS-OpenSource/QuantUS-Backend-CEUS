@@ -2,13 +2,13 @@
 
 Image preprocessing plugins specify transformations to apply to the loaded CEUS scan before starting with analysis. These transformations can take place on the linearized signal intensities and the pixel values of the scan.
 
-New plugins can be added to the [src/image_preprocessing/functions.py](functions.py) file as a new function, and will extend the capabilities of QuantUS without any additional programming required.
+New plugins can be added to the [src/image_preprocessing/image_preprocessors](image_preprocessors) folder as a new .py file containing a function, and will extend the capabilities of QuantUS without any additional programming required.
 
 ## Plugin Implementation
 
 ### Plugin Structure
 
-Each segmentation loading plugin should be placed in the [src/image_preprocessing/functions.py](functions.py) file as a new function. Specifically, the new function must be in the following form:
+Each segmentation loading plugin should be placed in the [src/image_preprocessing/image_preprocessors](image_preprocessors) folder as a new .py file containing a function. Specifically, the new function must be in the following form:
 
 ```python
 def IMG_PREPROC_NAME(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:

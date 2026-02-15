@@ -4,7 +4,7 @@ Inspired by time-intensity curve (TIC) analysis, analysis in this workflow is ba
 
 QuantUS supports whole segmentation and parametric map CEUS analysis.
 
-New curve definitions can be added to the [src/time_series_analysis/curve_types/functions.py](curve_types/functions.py) file as a new function, and will extend the capabilities of QuantUS without any additional programming required.
+New curve definitions can be added to the [src/time_series_analysis/curve_types/curve_definitions](curve_types/curve_definitions) folder as a new .py file containing a function, and will extend the capabilities of QuantUS without any additional programming required.
 
 ## Structure
 
@@ -16,7 +16,7 @@ New curve definitions can be added to the [src/time_series_analysis/curve_types/
 
 ### Plugin Structure
 
-Each curve definition plugin should be placed in the [src/time_series_analysis/curve_types/functions.py](functions.py) file as a new function. Specifically, the new function must be in the following form:
+Each curve definition plugin should be placed in the [src/time_series_analysis/curve_types/curve_definitions](curve_definitions) folder as a new .py file containing a function. Specifically, the new function must be in the following form:
 
 ```python
 def CURVE_NAME(image_data: UltrasoundImage, frame: np.ndarray, mask: np.ndarray, **kwargs) -> Tuple[List[str], List[np.ndarray]]:

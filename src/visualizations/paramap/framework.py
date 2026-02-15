@@ -8,7 +8,7 @@ import pandas as pd
 from ...data_objs.visualizations import ParamapDrawingBase
 from ...curve_quantification.framework import CurveQuantifications
 from ...time_series_analysis.curves_paramap.framework import CurvesParamapAnalysis
-from .functions import *
+from ..options import get_visualization_types
 
 class_name = "ParamapVisualizations"
 
@@ -26,6 +26,7 @@ class ParamapVisualizations(ParamapDrawingBase):
         self.paramap_folder_path = kwargs['paramap_folder_path']
         self.hide_all_visualizations = kwargs.get('hide_all_visualizations', False)
         
+        _, self.visualization_funcs = get_visualization_types()
         self.params = params
         self.quants_obj = quants_obj
         self.results_df = pd.DataFrame(quants_obj.data_dict)
@@ -146,7 +147,7 @@ class ParamapVisualizations(ParamapDrawingBase):
                        
         # Complete all custom visualizations
         for func_name in self.custom_funcs:
-            function = globals()[func_name]
+            function = self.visualization_funcs[func_name]
             function(self.quants_obj, **self.kwargs)
 
         if not self.hide_all_visualizations:

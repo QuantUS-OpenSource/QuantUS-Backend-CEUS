@@ -3,9 +3,8 @@ import pandas as pd
 from typing import Dict, List
 from pathlib import Path
 from tqdm import tqdm
-
+from options import get_quantification_funcs
 from ..time_series_analysis.curves.framework import CurvesAnalysis
-from .functions import *
 
 class_name = "CurveQuantifications"
 
@@ -31,6 +30,7 @@ class CurveQuantifications:
         self.function_names = function_names
         self.output_path = output_path
         self.kwargs = kwargs
+        self.available_functions = get_quantification_funcs()
 
         self.determine_func_order()
 
@@ -45,9 +45,9 @@ class CurveQuantifications:
         def process_deps(func_name):
             if func_name in self.ordered_func_names:
                 return
-            if func_name in globals():
+            if func_name in self.available_functions:
                 # Handle function dependencies and outputs
-                function = globals()[func_name]
+                function = self.available_functions[func_name]
                 deps = getattr(function, 'dependencies', [])
                 for dep in deps:
                     process_deps(dep)

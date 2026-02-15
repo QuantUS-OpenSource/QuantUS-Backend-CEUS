@@ -2,7 +2,7 @@
 
 Segmentation loading plugins load binary masks to specify where in the loaded CEUS scan to analyze. Plugins support data loading from different file formats.
 
-New plugins can be added to the [src/seg_loading/functions.py](functions.py) file as a new function, and will extend the capabilities of QuantUS without any additional programming required.
+New plugins can be added to the [src/seg_loading/seg_loaders](seg_loaders) folder as a new .py file containing a function, and will extend the capabilities of QuantUS without any additional programming required.
 
 ## Plugin Implementation
 
@@ -26,7 +26,7 @@ The pixel dimensions, segmentation name, and binary mask are all that must be sa
 
 ### Plugin Structure
 
-Each segmentation loading plugin should be placed in the [src/seg_loading/functions.py](functions.py) file as a new function. Specifically, the new function must be in the following form:
+Each segmentation loading plugin should be placed in the [src/seg_loading/seg_loaders](seg_loaders) folder as a new .py file containing a function. Specifically, the new function must be in the following form:
 
 ```python
 def SEG_LOADER_NAME(image_data: UltrasoundImage, seg_path: str, **kwargs) -> CeusSeg:
