@@ -1,5 +1,5 @@
 import numpy as np
-from .framework import CurveQuantifications
+from ..framework import CurveQuantifications
 
 def plot_tics(quants_obj: CurveQuantifications, paramap_folder_path: str, **kwargs):
     """Plot time-intensity curves for all voxels in the segmentation mask.

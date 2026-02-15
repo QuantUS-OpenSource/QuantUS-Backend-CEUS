@@ -1,9 +1,7 @@
-import numpy as np
-
-from .decorators import required_kwargs
-from ..data_objs.image import UltrasoundImage
-from ..data_objs.seg import CeusSeg
-from ..image_preprocessing.transforms import resample_to_spacing_2d, resample_to_spacing_3d
+from ..decorators import required_kwargs
+from ...data_objs.image import UltrasoundImage
+from ...data_objs.seg import CeusSeg
+from ...image_preprocessing.transforms import resample_to_spacing_2d, resample_to_spacing_3d
 
 @required_kwargs('target_vox_size', 'interp')
 def resample(image_data: UltrasoundImage, seg_data: CeusSeg, **kwargs) -> CeusSeg:

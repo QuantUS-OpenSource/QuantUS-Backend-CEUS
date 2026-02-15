@@ -6,7 +6,6 @@ from tqdm import tqdm
 
 from ...data_objs.image import UltrasoundImage
 from ...data_objs.seg import CeusSeg
-from ..curve_types.functions import *
 from ..curves.framework import CurvesAnalysis
 
 class_name = "CurvesParamap"

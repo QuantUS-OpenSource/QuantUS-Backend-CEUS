@@ -38,21 +38,22 @@ def get_visualization_types() -> Tuple[dict, dict]:
                 # Handle the case where the module cannot be found
                 print(f"Module src.visualizations.{folder.name}.framework could not be found: {e}")
                 pass
-            
+    
     functions = {}
     for type_name, type_class in types.items():
         try:
-            module = importlib.import_module(__package__ + f'.{type_name}.functions')
-            for name, obj in vars(module).items():
-                try:
-                    if callable(obj) and obj.__module__ == __package__ + f'.{type_name}.functions':
-                        functions[type_name] = functions.get(type_name, {})
-                        functions[type_name][name] = obj
-                except (TypeError, KeyError):
-                    pass
-        except ModuleNotFoundError as e:
+            for file in (Path(__file__).parent / type_name / "visualization_plugins").iterdir():
+                module = importlib.import_module(f'.{type_name}.visualization_plugins.{file.stem}', package=__package__)
+                for name, obj in vars(module).items():
+                    try:
+                        if callable(obj) and obj.__module__ == module.__name__:
+                            functions[type_name] = functions.get(type_name, {})
+                            functions[type_name][name] = obj
+                    except (TypeError, KeyError):
+                        pass
+        except FileNotFoundError as e:
             # Handle the case where the functions module cannot be found
-            print(f"Module src.visualizations.{type_name}.functions could not be found: {e}")
+            print(f"Folder src.visualizations.{type_name}.visualization_plugins could not be found: {e}")
             functions[type_name] = {}
             
     return types, functions
