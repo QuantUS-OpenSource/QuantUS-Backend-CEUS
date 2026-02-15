@@ -70,15 +70,21 @@ class EntryClass(UltrasoundImage):
                 for i in range(self.pixel_data.shape[0]):
                     frame = self.pixel_data[i]
                     if 'YBR' in photometric_interpretation:
-                        # Simple YBR to Gray approximation if needed, 
-                        # but often OpenCV BGR2GRAY works if pydicom already converted to RGB
+                        # For YBR photometric interpretations, pydicom.pixel_array typically
+                        # returns data already converted to RGB. In that case we can safely 
+                        # treat the frame as RGB and convert it to grayscale.
                         gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
                     else:
-                        # Try BGR first (standard for OpenCV), then RGB if that fails or looks wrong
-                        try:
-                            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        except cv2.error:
+                        if str(photometric_interpretation).upper().startswith('RGB'):
                             gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                        else:
+                            # If photometric interpretation is not RGB or YBR, we can attempt to convert
+                            # using OpenCV, but this may not always be correct. In that case, we can
+                            # simply take the first channel as a fallback.
+                            try:
+                                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            except cv2.error:
+                                gray_frame = frame[:, :, 0]  # Fallback to first channel
                     self.intensities_for_analysis.append(gray_frame)
                 self.intensities_for_analysis = np.array(self.intensities_for_analysis)
         else:
