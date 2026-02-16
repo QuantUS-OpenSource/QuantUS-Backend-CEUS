@@ -4,7 +4,7 @@ import numpy as np
 from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
 
-@required_kwargs('clip_limit', 'tile_grid_size', 'frame_ix')
+@required_kwargs('clip_limit', 'tile_grid_size')
 def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
     """
     Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization).
@@ -12,11 +12,9 @@ def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
     Kwargs:
         clip_limit (float): Threshold for contrast limiting.
         tile_grid_size (tuple): Size of grid for histogram equalization.
-        frame_ix (int): Frame index to process. If -1, process all frames.
     """
     clip_limit = kwargs.get('clip_limit', 3.0)
     tile_grid_size = kwargs.get('tile_grid_size', (8, 8))
-    frame_ix = kwargs.get('frame_ix', -1)
 
     frames = image_data.pixel_data
         
@@ -25,15 +23,10 @@ def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
 
     is_2d = frames.ndim == 3
 
-    if frame_ix == -1:
-        frame_indices = range(frames.shape[-1])
-    else:
-        frame_indices = [frame_ix]
-
-    enhanced = np.zeros(list(frames.shape[:-1]) + [len(frame_indices)])
+    enhanced = np.zeros_like(frames, dtype=frames.dtype)
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     
-    for i, z in enumerate(frame_indices):
+    for z in range(frames.shape[-1]):
         cur_slice = frames[:, :, z] if is_2d else frames[:, :, :, z].astype(np.float32)
         if cur_slice.dtype not in [np.uint8, np.uint16]:
             if v_range > 0:
@@ -57,14 +50,9 @@ def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
                 clahe_result = cur_slice
         
         if is_2d:
-            enhanced[:, :, i] = clahe_result
+            enhanced[:, :, z] = clahe_result
         else:
-            enhanced[:, :, :, i] = clahe_result
+            enhanced[:, :, :, z] = clahe_result
 
-    for i, z in enumerate(frame_indices):
-        if is_2d:
-            image_data.pixel_data[:, :, z] = enhanced[:, :, i]
-        else:
-            image_data.pixel_data[:, :, :, z] = enhanced[:, :, :, i]
-
+    image_data.pixel_data = enhanced
     return image_data

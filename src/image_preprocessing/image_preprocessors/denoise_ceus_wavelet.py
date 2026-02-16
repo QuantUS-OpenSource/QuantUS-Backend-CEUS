@@ -4,7 +4,7 @@ from skimage.restoration import denoise_wavelet, estimate_sigma
 from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
 
-@required_kwargs('wavelet', 'sigma_scale', 'frame_ix')
+@required_kwargs('wavelet', 'sigma_scale')
 def denoise_ceus_wavelet(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
     """
     Gentler wavelet denoising.
@@ -12,27 +12,20 @@ def denoise_ceus_wavelet(image_data: UltrasoundImage, **kwargs) -> UltrasoundIma
     Kwargs:
         wavelet (str): Wavelet type.
         sigma_scale (float): Scale factor for noise estimate.
-        frame_ix (int): Frame index to process. If -1, process all frames.
     """
     wavelet = kwargs.get('wavelet', 'db1')
     sigma_scale = kwargs.get('sigma_scale', 0.8)
-    frame_ix = kwargs.get('frame_ix', -1)
 
     frames = image_data.pixel_data
     
     v_min, v_max = frames.min(), frames.max()
     v_range = v_max - v_min
 
-    if frame_ix == -1:
-        frame_indices = range(frames.shape[-1])
-    else:
-        frame_indices = [frame_ix]
-
-    denoised = np.zeros(list(frames.shape[:-1]) + [len(frame_indices)])
+    denoised = np.zeros_like(frames, dtype=frames.dtype)
 
     is_2d = frames.ndim == 3
 
-    for i, z in enumerate(frame_indices):
+    for z in range(frames.shape[-1]):
         cur_slice = frames[:, :, z].astype(np.float32) if is_2d else frames[:, :, :, z].astype(np.float32)
         if v_range > 0:
             slice_norm = (cur_slice - v_min) / v_range
@@ -66,14 +59,14 @@ def denoise_ceus_wavelet(image_data: UltrasoundImage, **kwargs) -> UltrasoundIma
             denoised_slice = denoised_slice * v_range + v_min
         
         if is_2d:
-            denoised[:, :, i] = denoised_slice
+            denoised[:, :, z] = denoised_slice
         else:
-            denoised[:, :, :, i] = denoised_slice
+            denoised[:, :, :, z] = denoised_slice
     
-    for i, z in enumerate(frame_indices):
+    for z in range(frames.shape[-1]):
         if is_2d:
-            image_data.pixel_data[:, :, z] = denoised[:, :, i]
+            image_data.pixel_data[:, :, z] = denoised[:, :, z]
         else:
-            image_data.pixel_data[:, :, :, z] = denoised[:, :, :, i]
+            image_data.pixel_data[:, :, :, z] = denoised[:, :, :, z]
     
     return image_data
