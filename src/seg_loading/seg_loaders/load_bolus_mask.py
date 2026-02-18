@@ -20,7 +20,14 @@ def load_bolus_mask(image_data: UltrasoundImage, seg_path: str, **kwargs) -> Ceu
         sitk.Image: The loaded bolus mask image.
     """
     bolus_seg = np.asarray(nib.load(seg_path).dataobj, dtype=np.uint8).T
-    bolus_seg = (np.max(bolus_seg, axis=3) > 0).astype(np.uint8)
+    if bolus_seg.ndim > 3:
+        bolus_seg = (np.max(bolus_seg, axis=3) > 0).astype(np.uint8)
+    else:
+        bolus_seg = (bolus_seg > 0).astype(np.uint8)
+
+    if bolus_seg.ndim == 2:
+        bolus_seg = bolus_seg[np.newaxis, :, :]
+
     bolus_seg = bolus_seg[:, :image_data.pixel_data.shape[1], :]
     bolus_seg = binary_fill_holes(bolus_seg).astype(np.uint8)
     for i in range(bolus_seg.shape[0]):
