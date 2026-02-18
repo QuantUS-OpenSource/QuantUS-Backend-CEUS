@@ -5,7 +5,7 @@ import SimpleITK as sitk
 from tqdm import tqdm
 
 def resample_to_spacing_2d(image_arr: np.ndarray, original_spacing: Tuple[float, float], 
-                        new_spacing: Tuple[float, float], interp='linear') -> sitk.Image:
+                        new_spacing: Tuple[float, float], interp='linear', volume_ix=None) -> np.ndarray:
     """Resample to isotropic/anisotropic spacing by recomputing size.
     Maintains image FOV; origin/direction preserved.
     """
@@ -28,7 +28,11 @@ def resample_to_spacing_2d(image_arr: np.ndarray, original_spacing: Tuple[float,
         raise ValueError("Interpolation method must be 'linear', 'nearest', or 'cubic'.")
 
     resampled_frames = []
-    for i in tqdm(range(image_arr.shape[0]), desc="Resampling frames"):
+    
+    # Handle single volume indexing
+    frames_to_proc = [volume_ix] if volume_ix is not None else range(image_arr.shape[0])
+    
+    for i in tqdm(frames_to_proc, desc="Resampling frames"):
         frame = image_arr[i]
 
         # Handles grayscale (y, x) or RGB (y, x, c)
@@ -59,7 +63,7 @@ def resample_to_spacing_2d(image_arr: np.ndarray, original_spacing: Tuple[float,
     return out
 
 def resample_to_spacing_3d(image_arr: np.ndarray, original_spacing: Tuple[float, float, float], 
-                        new_spacing: Tuple[float, float, float], interp='linear') -> sitk.Image:
+                        new_spacing: Tuple[float, float, float], interp='linear', volume_ix=None) -> np.ndarray:
     """Resample to isotropic/anisotropic spacing by recomputing size.
     Maintains image FOV; origin/direction preserved.
     """
@@ -89,7 +93,11 @@ def resample_to_spacing_3d(image_arr: np.ndarray, original_spacing: Tuple[float,
         raise ValueError("Interpolation method must be one of 'linear', 'nearest', or 'cubic'.")
     
     resampled_frames = []
-    for i in tqdm(range(image_arr.shape[3]), desc="Resampling frames"):
+    
+    # Handle single volume indexing
+    frames_to_proc = [volume_ix] if volume_ix is not None else range(image_arr.shape[3])
+
+    for i in tqdm(frames_to_proc, desc="Resampling frames"):
         frame = sitk.GetImageFromArray(image_arr[:, :, :, i])
         frame.SetSpacing(spacing)
         frame.SetOrigin(origin)
