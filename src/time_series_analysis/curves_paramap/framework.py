@@ -107,25 +107,75 @@ class CurvesParamapAnalysis(CurvesAnalysis):
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[3])), 
                                         desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[3]):
                 frame_data = self.image_data.intensities_for_analysis[:, :, :, frame]
+                
+                # Get motion vector for this frame
+                if self.seg_data.use_mc:
+                    dx, dy, dz = self.seg_data.motion_compensation.get_translation(frame_ix)
+                    dx, dy, dz = int(round(dx)), int(round(dy)), int(round(dz))
+                else:
+                    dx, dy, dz = 0, 0, 0
+                
                 for window_ix, window in enumerate(self.windows):
-                    mask = np.zeros_like(self.seg_data.seg_mask)
+                    # SHIFT window location by motion vector
                     ax_start, sag_start, cor_start, ax_end, sag_end, cor_end = window
-                    mask[sag_start:sag_end+1, 
-                            cor_start:cor_end+1, 
-                            ax_start:ax_end+1] = 1
-                    self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    
+                    # Apply motion compensation to window coordinates
+                    ax_start_shifted = ax_start + dx
+                    ax_end_shifted = ax_end + dx
+                    sag_start_shifted = sag_start + dy
+                    sag_end_shifted = sag_end + dy
+                    cor_start_shifted = cor_start + dz
+                    cor_end_shifted = cor_end + dz
+                    
+                    # Create mask at SHIFTED window location
+                    mask = np.zeros_like(self.seg_data.seg_mask)
+                    
+                    # Bounds checking
+                    if (0 <= sag_start_shifted < mask.shape[0] and sag_end_shifted <= mask.shape[0] and
+                        0 <= cor_start_shifted < mask.shape[1] and cor_end_shifted <= mask.shape[1] and
+                        0 <= ax_start_shifted < mask.shape[2] and ax_end_shifted <= mask.shape[2]):
+                        
+                        mask[sag_start_shifted:sag_end_shifted+1, 
+                            cor_start_shifted:cor_end_shifted+1, 
+                            ax_start_shifted:ax_end_shifted+1] = 1
+                        
+                        self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    
         elif self.image_data.intensities_for_analysis.ndim == 3: # 2D + time
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[0])), 
                                         desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[0]):
                 frame_data = self.image_data.intensities_for_analysis[frame]
+                
+                # Get motion vector for this frame (2D case - only dx, dy)
+                if self.seg_data.use_mc:
+                    dx, dy, _ = self.seg_data.motion_compensation.get_translation(frame_ix)
+                    dx, dy = int(round(dx)), int(round(dy))
+                else:
+                    dx, dy = 0, 0
+                
                 for window_ix, window in enumerate(self.windows):
-                    mask = np.zeros_like(self.seg_data.seg_mask)
                     ax_start, sag_start, ax_end, sag_end = window
-                    mask[ax_start:ax_end+1, sag_start:sag_end+1] = 1
-                    self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    
+                    # Apply motion compensation to window coordinates
+                    ax_start_shifted = ax_start + dx
+                    ax_end_shifted = ax_end + dx
+                    sag_start_shifted = sag_start + dy
+                    sag_end_shifted = sag_end + dy
+                    
+                    # Create mask at SHIFTED window location
+                    mask = np.zeros_like(self.seg_data.seg_mask)
+                    
+                    # Bounds checking
+                    if (0 <= ax_start_shifted < mask.shape[0] and ax_end_shifted <= mask.shape[0] and
+                        0 <= sag_start_shifted < mask.shape[1] and sag_end_shifted <= mask.shape[1]):
+                        
+                        mask[ax_start_shifted:ax_end_shifted+1, 
+                            sag_start_shifted:sag_end_shifted+1] = 1
+                        
+                        self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
         else:
             raise ValueError("Image data must be either 2D+time or 3D+time.")
-
+        
         if self.curves_output_path:
             self.save_curves()
 
