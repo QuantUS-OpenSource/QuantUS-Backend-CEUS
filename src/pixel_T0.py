@@ -204,7 +204,7 @@ def generate_t0_map_3d(
             dx, dy, dz = int(round(dx)), int(round(dy)), int(round(dz))
             frame_mask = _shift_mask(static_mask, dx, dy, dz)
         else:
-            frame_mask = static_mask
+            frame_mask = _shift_mask(static_mask, 0, 0, 0)
 
         above_threshold = (current_vol >= threshold) & frame_mask
 

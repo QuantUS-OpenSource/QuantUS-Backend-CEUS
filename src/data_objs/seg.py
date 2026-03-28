@@ -10,3 +10,4 @@ class CeusSeg:
         self.seg_name: str
         self.seg_mask: np.ndarray
         self.pixdim: List[float]  # voxel spacing in mm
+        self.motion_compensation = None  # MotionCompensationResult, set after MC

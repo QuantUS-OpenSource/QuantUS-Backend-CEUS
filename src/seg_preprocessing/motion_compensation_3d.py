@@ -1,6 +1,6 @@
 """
 3D Motion Compensation for CEUS Analysis
-Based on ILSA tracking, directly creates mc_seg_mask
+Based on ILSA tracking
 Axis convention: (X, Y, Z, T) = (lateral, depth, elevational, time)
 """
 
