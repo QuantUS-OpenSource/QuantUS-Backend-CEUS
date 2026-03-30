@@ -47,6 +47,7 @@ def nifti(image_data: UltrasoundImage, seg_path: str, **kwargs) -> CeusSeg:
                 reference_bbox=BoundingBox3D(*mc['reference_bbox']),
                 tracked_bboxes=[BoundingBox3D(*b) for b in mc['tracked_bboxes']],
             )
+            out.use_mc = True
             break
         except Exception:
             pass
