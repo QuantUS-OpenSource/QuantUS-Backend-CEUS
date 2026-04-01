@@ -11,3 +11,4 @@ class CeusSeg:
         self.seg_mask: np.ndarray
         self.pixdim: List[float]  # voxel spacing in mm
         self.motion_compensation = None  # MotionCompensationResult, set after MC
+        self.use_mc: bool = False  # True when MC vectors should be applied during analysis
