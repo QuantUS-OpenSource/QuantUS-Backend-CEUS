@@ -11,7 +11,7 @@ def get_im_preproc_funcs() -> dict:
     for file in (Path(__file__).parent / "image_preprocessors").iterdir():
         module = importlib.import_module(f'.image_preprocessors.{file.stem}', package=__package__)
         for name, obj in vars(module).items():
-            if callable(obj) and obj.__module__ == module.__name__:
+            if callable(obj) and obj.__module__ == module.__name__ and not obj.__name__.startswith("_"):
                 functions[name] = obj
     return functions
 

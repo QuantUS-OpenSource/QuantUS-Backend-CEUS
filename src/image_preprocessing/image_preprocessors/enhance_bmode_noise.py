@@ -17,6 +17,18 @@ def enhance_bmode_noise(image_data: UltrasoundImage, **kwargs) -> UltrasoundImag
     p_low_pct = float(kwargs.get('p_low_percentile', 2))
     p_high_pct = float(kwargs.get('p_high_percentile', 98))
 
+    if not (0.0 <= p_low_pct <= 100) or not (0.0 <= p_high_pct <= 100.0):
+        raise ValueError(
+            f"p_low_percentile and p_high_percentile must be within [0, 100]; "
+            f"got p_low_percentile={p_low_pct}, p_high_percentile={p_high_pct}"
+        )
+    
+    if p_high_pct <= p_low_pct:
+        raise ValueError(
+            f"p_low_percentile must be less than p_high_percentile; "
+            f"got p_low_percentile={p_low_pct}, p_high_percentile={p_high_pct}"
+        )
+
     pixel_data = image_data.pixel_data  # H x W x Z x T
     if pixel_data.ndim != 4:
         raise ValueError("enhance_bmode_noise expects 4D data (H x W x Z x T).")
