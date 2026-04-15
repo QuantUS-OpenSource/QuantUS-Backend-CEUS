@@ -32,7 +32,7 @@ def load_bolus_mask(image_data: UltrasoundImage, seg_path: str, **kwargs) -> Ceu
     
     out = CeusSeg()
     out.seg_mask = bolus_seg
-    out.pixdim = image_data.pixdim
+    
     if seg_path.endswith('.nii.gz'):
         out.seg_name = Path(seg_path).name[:-7]  # Remove '.nii.gz'
     else:
