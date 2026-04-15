@@ -16,6 +16,7 @@ class EntryClass(UltrasoundImage):
 
     Kwargs:
         - transpose: whether to transpose the pixel data (default False).
+        - is_bgr: whether the video uses BGR color format (default True, for OpenCV).
     """
     required_kwargs = ['pix_height_mm', 'pix_width_mm']
     extensions = [".avi"]
@@ -28,6 +29,8 @@ class EntryClass(UltrasoundImage):
         assert max([scan_path.endswith(x) for x in self.extensions]), f"File must end with {self.extensions}"
         
         cap = cv2.VideoCapture(scan_path)
+        is_bgr = kwargs.get('is_bgr', True)
+
         n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_rate = 1/cap.get(cv2.CAP_PROP_FPS)
         ret, first_frame = cap.read()
@@ -36,7 +39,8 @@ class EntryClass(UltrasoundImage):
             return
 
         # Extract RGB frames from AVI
-        first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
+        if is_bgr:
+            first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
         pixel_data = np.zeros(
             (n_frames, first_frame.shape[0], first_frame.shape[1], 3),
             dtype=first_frame.dtype
@@ -47,7 +51,8 @@ class EntryClass(UltrasoundImage):
             if not ret:
                 print("Video data ended prematurely!")
                 break
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if is_bgr:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pixel_data[i] = frame
 
         # Extract grayscale frames from RGB
