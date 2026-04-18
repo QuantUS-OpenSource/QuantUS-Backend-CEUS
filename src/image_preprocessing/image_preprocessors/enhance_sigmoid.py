@@ -1,7 +1,7 @@
 from skimage import exposure
 
-from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
+from ..decorators import required_kwargs
 
 @required_kwargs('cutoff', 'gain')
 def enhance_sigmoid(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:

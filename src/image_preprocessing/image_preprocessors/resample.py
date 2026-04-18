@@ -1,5 +1,5 @@
-from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
+from ..decorators import required_kwargs
 from ..transforms import resample_to_spacing_2d, resample_to_spacing_3d
 
 @required_kwargs('target_vox_size', 'interp')

@@ -11,6 +11,8 @@ def resample_to_spacing_2d(image_arr: np.ndarray, original_spacing: Tuple[float,
     """
     assert image_arr.ndim in (2, 3, 4), \
         "Image array must be 3D (t, y, x) for grayscale or 4D (t, y, x, c) for RGB."
+    assert len(original_spacing) == 2 and len(new_spacing) == 2, \
+        "Original and new spacing must be 2D tuples for 2D data (y, x)."
 
     if image_arr.ndim == 2:
         image_arr = np.expand_dims(image_arr, axis=0)  # (1, y, x)
@@ -64,6 +66,8 @@ def resample_to_spacing_3d(image_arr: np.ndarray, original_spacing: Tuple[float,
     Maintains image FOV; origin/direction preserved.
     """
     assert image_arr.ndim in (3, 4), "Image array must be 3D (x, y, z) or 4D (x, y, z, t)."
+    assert len(original_spacing) == 3 and len(new_spacing) == 3, \
+        "Original and new spacing must be 3D tuples for 3D data (x, y, z)."
 
     affine = np.eye(4)
     reversed_dims = list(reversed(original_spacing)) # Ensure spacing is in (z, y, x) order for SimpleITK
