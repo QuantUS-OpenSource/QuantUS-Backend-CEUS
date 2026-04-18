@@ -1,4 +1,5 @@
 from skimage import exposure
+
 from ...data_objs.image import UltrasoundImage
 from ..decorators import required_kwargs
 

@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from ...data_objs.image import UltrasoundImage
 from ...data_objs.seg import CeusSeg
-from ..curve_types.functions import *
+from ..options import get_analysis_types
 
 class_name = "CurvesAnalysis"
 
@@ -26,7 +26,8 @@ class CurvesAnalysis:
         self.seg_data = seg
         self.image_data = image_data
         self.curves: List[Dict[str, List[float]]] = [{}]  # List to hold computed curves
-        self.curve_funcs: Dict[str, callable] = {name: globals()[name] for name in self.curve_groups if name in globals()}
+        _, all_curve_funcs = get_analysis_types()
+        self.curve_funcs = {name: all_curve_funcs[name] for name in self.curve_groups if name in all_curve_funcs}
         self.curves_output_path = self.analysis_kwargs.get('curves_output_path', None)
         frame_rate = self.image_data.frame_rate if np.isfinite(self.image_data.frame_rate) else 1.0
         if image_data.intensities_for_analysis.ndim == 4: # 3D + time

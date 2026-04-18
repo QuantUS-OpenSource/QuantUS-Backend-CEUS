@@ -25,8 +25,11 @@ psutil==7.0.0
 pure_eval==0.2.3
 pydicom
 Pygments==2.19.1
+pylibjpeg==2.1.0
+pyjpegls==1.5.1
 pyradiomics==3.0.1
 python-dateutil==2.9.0.post0
+python-gdcm==3.2.2
 pyqtdarktheme
 PyQt6==6.7.1
 PyYAML==6.0.2

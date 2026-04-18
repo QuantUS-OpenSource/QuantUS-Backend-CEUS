@@ -1,8 +1,5 @@
+import importlib
 from pathlib import Path
-
-from argparse import ArgumentParser
-
-from .functions import *
 
 def get_curves_loaders() -> dict:
     """Get curves loaders for the CLI.
@@ -10,5 +7,10 @@ def get_curves_loaders() -> dict:
     Returns:
         dict: Dictionary of curve loaders.
     """
-    functions = {name: obj for name, obj in globals().items() if callable(obj) and obj.__module__ == __package__ + '.functions'}
+    functions = {}
+    for file in (Path(__file__).parent / "curve_loaders").iterdir():
+        module = importlib.import_module(f'.curve_loaders.{file.stem}', package=__package__)
+        for name, obj in vars(module).items():
+            if callable(obj) and obj.__module__ == module.__name__:
+                functions[name] = obj
     return functions

@@ -2,13 +2,13 @@
 
 Curve quantification plugins specify how to compute individual parameters from CEUS curves computed earlier in the analysis pipeline.
 
-New plugins can be added to the [src/curve_quantification/functions.py](functions.py) file as a new function, and will extend the capabilities of QuantUS without any additional programming required.
+New plugins can be added to the [src/curve_quantification/quantification_plugins](quantification_plugins) folder as a new .py file containing function, and will extend the capabilities of QuantUS without any additional programming required.
 
 ## Plugin Implementation
 
 ### Plugin Structure
 
-Each segmentation loading plugin should be placed in the [src/curve_quantification/functions.py](functions.py) file as a new function. Specifically, the new function must be in the following form:
+Each segmentation loading plugin should be placed in the [src/curve_quantification/quantification_plugins](quantification_plugins) folder as a new .py file containing a function. Specifically, the new function must be in the following form:
 
 ```python
 def QUANT_NAME(analysis_objs: CurvesAnalysis, curves: Dict[str, List[float]], data_dict: dict,  **kwargs) -> None:

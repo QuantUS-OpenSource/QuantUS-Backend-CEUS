@@ -1,5 +1,6 @@
-import numpy as np
 import cv2
+import numpy as np
+
 from ...data_objs.image import UltrasoundImage
 from ..decorators import required_kwargs
 
@@ -14,29 +15,44 @@ def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
     """
     clip_limit = kwargs.get('clip_limit', 3.0)
     tile_grid_size = kwargs.get('tile_grid_size', (8, 8))
-    
-    volume = image_data.pixel_data
-    is_2d = volume.ndim == 2
-    if is_2d:
-        volume = volume[:, :, np.newaxis]
+
+    frames = image_data.pixel_data
         
-    v_min, v_max = volume.min(), volume.max()
+    v_min, v_max = frames.min(), frames.max()
     v_range = v_max - v_min
 
-    enhanced = np.zeros_like(volume)
+    is_2d = frames.ndim == 3
+
+    enhanced = np.zeros_like(frames, dtype=frames.dtype)
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
     
-    for z in range(volume.shape[2]):
-        slice_2d = volume[:, :, z]
-        if slice_2d.dtype not in [np.uint8, np.uint16]:
+    for z in range(frames.shape[-1]):
+        cur_slice = frames[:, :, z] if is_2d else frames[:, :, :, z].astype(np.float32)
+        if cur_slice.dtype not in [np.uint8, np.uint16]:
             if v_range > 0:
-                slice_to_proc = ((slice_2d - v_min) / v_range * 255).astype(np.uint8)
+                slice_to_proc = ((cur_slice - v_min) / v_range * 255).astype(np.uint8)
             else:
-                slice_to_proc = slice_2d.astype(np.uint8)
+                slice_to_proc = cur_slice.astype(np.uint8)
         else:
-            slice_to_proc = slice_2d
-            
-        enhanced[:, :, z] = clahe.apply(slice_to_proc)
+            slice_to_proc = cur_slice
+
+        if not is_2d:
+            for c in range(slice_to_proc.shape[2]):
+                slice_to_proc[:, :, c] = clahe.apply(slice_to_proc[:, :, c])
+            clahe_result = slice_to_proc
+        else:
+            clahe_result = clahe.apply(slice_to_proc)
+
+        if cur_slice.dtype not in [np.uint8, np.uint16]:
+            if v_range > 0:
+                clahe_result = (clahe_result.astype(np.float32) / 255 * v_range + v_min).astype(cur_slice.dtype)
+            else: # no dynamic range - keep original values
+                clahe_result = cur_slice
         
-    image_data.pixel_data = enhanced[:, :, 0] if is_2d else enhanced
+        if is_2d:
+            enhanced[:, :, z] = clahe_result
+        else:
+            enhanced[:, :, :, z] = clahe_result
+
+    image_data.pixel_data = enhanced
     return image_data

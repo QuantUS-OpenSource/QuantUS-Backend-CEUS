@@ -1,4 +1,5 @@
 import numpy as np
+
 from ...data_objs.image import UltrasoundImage
 from ..decorators import required_kwargs
 from .resample import resample
@@ -19,5 +20,6 @@ def enhance_spatial_resolution(image_data: UltrasoundImage, **kwargs) -> Ultraso
         return image_data
 
     # Adjust spacing inversely to scale factor
+    assert scale_factor > 0, 'Scale factor must be positive'
     target_vox_size = tuple(np.array(image_data.pixdim) / scale_factor)
     return resample(image_data, target_vox_size=target_vox_size, interp=interp)

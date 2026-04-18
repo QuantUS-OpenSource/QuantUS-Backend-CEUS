@@ -58,12 +58,11 @@ def get_analysis_types() -> Tuple[dict, dict]:
                 # Handle the case where the module cannot be found
                 pass
             
-    module = importlib.import_module(__package__ + '.curve_types.functions')
-    module_file = module.__file__
-    defined_funcs = set()
-    for name, obj in inspect.getmembers(module, inspect.isfunction):
-        if not name.startswith("_") and inspect.getsourcefile(obj) == module_file:
-            defined_funcs.add(name)
-    functions = {name: obj for name, obj in inspect.getmembers(module, inspect.isfunction) if name in defined_funcs}
-            
+    functions = {}
+    for file in (Path(__file__).parent / "curve_types" / "curve_definitions").iterdir():
+        module = importlib.import_module(f'.curve_types.curve_definitions.{file.stem}', package=__package__)
+        for name, obj in inspect.getmembers(module, inspect.isfunction):
+            if not name.startswith("_") and obj.__module__ == module.__name__:
+                functions[name] = obj
+
     return types, functions

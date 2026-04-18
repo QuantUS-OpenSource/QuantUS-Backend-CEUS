@@ -1,8 +1,8 @@
 import pandas as pd
 
-from ..data_objs.image import UltrasoundImage
-from ..data_objs.seg import CeusSeg
-from ..time_series_analysis.curves.framework import CurvesAnalysis
+from ...data_objs.image import UltrasoundImage
+from ...data_objs.seg import CeusSeg
+from ...time_series_analysis.curves.framework import CurvesAnalysis
 
 def load_ttc_curves(curves_path: str, **kwargs) -> CurvesAnalysis:
     """

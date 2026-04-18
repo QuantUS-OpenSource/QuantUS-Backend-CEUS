@@ -1,8 +1,7 @@
+import importlib
 from pathlib import Path
 
 from argparse import ArgumentParser
-
-from .functions import *
 
 def seg_preproc_args(parser: ArgumentParser):
     parser.add_argument('--seg_preproc_func', type=str, default='none',
@@ -16,7 +15,12 @@ def get_seg_preproc_funcs() -> dict:
     Returns:
         dict: Dictionary of preprocessing functions.
     """
-    functions = {name: obj for name, obj in globals().items() if callable(obj) and obj.__module__ == __package__ + '.functions'}
+    functions = {}
+    for file in (Path(__file__).parent / "seg_preprocessors").iterdir():
+        module = importlib.import_module(f'.seg_preprocessors.{file.stem}', package=__package__)
+        for name, obj in vars(module).items():
+            if callable(obj) and obj.__module__ == module.__name__:
+                functions[name] = obj
     return functions
 
 def get_required_seg_preproc_kwargs(preproc_func_names: list) -> list:
