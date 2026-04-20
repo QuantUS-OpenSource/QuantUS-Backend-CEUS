@@ -59,10 +59,17 @@ def get_analysis_types() -> Tuple[dict, dict]:
                 pass
             
     functions = {}
-    for file in (Path(__file__).parent / "curve_types" / "curve_definitions").iterdir():
-        module = importlib.import_module(f'.curve_types.curve_definitions.{file.stem}', package=__package__)
-        for name, obj in inspect.getmembers(module, inspect.isfunction):
-            if not name.startswith("_") and obj.__module__ == module.__name__:
-                functions[name] = obj
+    curve_defs_path = Path(__file__).parent / "curve_types" / "curve_definitions"
+    if curve_defs_path.exists():
+        for file in curve_defs_path.iterdir():
+            if file.suffix == ".py" and not file.name.startswith("_"):
+                try:
+                    module = importlib.import_module(f'.curve_types.curve_definitions.{file.stem}', package=__package__)
+                    for name, obj in inspect.getmembers(module, inspect.isfunction):
+                        if not name.startswith("_") and obj.__module__ == module.__name__:
+                            functions[name] = obj
+                except Exception as e:
+                    print(f"Error loading curve definition {file.name}: {e}")
+                    pass
 
     return types, functions

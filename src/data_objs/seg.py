@@ -9,4 +9,3 @@ class CeusSeg:
     def __init__(self):
         self.seg_name: str
         self.seg_mask: np.ndarray
-        self.pixdim: List[float]  # voxel spacing in mm
