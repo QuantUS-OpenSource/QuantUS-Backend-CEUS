@@ -1,7 +1,7 @@
 import numpy as np
 
-from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
+from ..decorators import required_kwargs
 
 @required_kwargs('arr_to_standardize')
 def standardize(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
