@@ -18,7 +18,7 @@ class EntryClass(UltrasoundImage):
         - transpose: whether to transpose the pixel data (default False).
         - is_bgr: whether the video uses BGR color format (default True, for OpenCV).
     """
-    required_kwargs = ['is_bgr', 'fallback_pix_height_mm', 'fallback_pix_width_mm']
+    required_kwargs = ['is_bgr', 'pix_height_mm', 'pix_width_mm']
     extensions = [".avi"]
     spatial_dims = 2
     
@@ -64,8 +64,8 @@ class EntryClass(UltrasoundImage):
             grayscale_arr[i] = cv2.cvtColor(pixel_data[i], cv2.COLOR_RGB2GRAY)
 
         # Pixdims not readable from AVI file alone - must be provided
-        pix_height_mm = kwargs.get('fallback_pix_height_mm', 1.0)
-        pix_width_mm = kwargs.get('fallback_pix_width_mm', 1.0)
+        pix_height_mm = kwargs.get('pix_height_mm', 1.0)
+        pix_width_mm = kwargs.get('pix_width_mm', 1.0)
 
         self.pixdim = [pix_height_mm, pix_width_mm]
         self.frame_rate = frame_rate # in seconds
