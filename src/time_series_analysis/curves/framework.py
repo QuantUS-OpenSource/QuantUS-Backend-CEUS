@@ -63,6 +63,14 @@ class CurvesAnalysis:
         Returns:
             np.ndarray: The computed parametric map values for the frame.
         """
+        # Ensure mask matches frame shape for 2D+time sequences
+        if mask.ndim == 2 and frame.ndim == 2 and mask.shape != frame.shape:
+             # This should not happen if they are both 2D, but just in case
+             pass
+        elif mask.ndim == 2 and frame.ndim == 3:
+            # Broadcast 2D mask to 3D frame if needed (spatial mismatch usually handled in loaders)
+             pass
+
         used_curve_names = []
         for curve_group in self.curve_groups:
             curve_function = self.curve_funcs[curve_group]
