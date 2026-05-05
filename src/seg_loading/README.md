@@ -19,10 +19,9 @@ class CeusSeg:
     def __init__(self):
         self.seg_name: str
         self.seg_mask: np.ndarray
-        self.pixdim: List[float]  # voxel spacing in mm
 ```
 
-The pixel dimensions, segmentation name, and binary mask are all that must be saved in a segmentation parser.
+The segmentation name and binary mask are all that must be saved in a segmentation parser.
 
 ### Plugin Structure
 

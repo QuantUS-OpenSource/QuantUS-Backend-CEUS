@@ -19,9 +19,9 @@ def nifti(image_data: UltrasoundImage, seg_path: str, **kwargs) -> CeusSeg:
     out.seg_mask = np.asarray(seg.dataobj, dtype=np.uint8)
 
     if out.seg_mask.ndim == 3: # 2D + time
-        out.pixdim = seg.header.get_zooms()[:2]
+        image_data.pixdim = list(seg.header.get_zooms()[:2])
     elif out.seg_mask.ndim == 4: # 3D + time
-        out.pixdim = seg.header.get_zooms()[:3]
+        image_data.pixdim = list(seg.header.get_zooms()[:3])
     
     if seg_path.endswith('.nii.gz'):
         out.seg_name = Path(seg_path).name[:-7]  # Remove '.nii.gz'
