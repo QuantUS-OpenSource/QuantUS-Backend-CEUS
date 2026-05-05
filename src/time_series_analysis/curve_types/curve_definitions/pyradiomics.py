@@ -29,6 +29,14 @@ def pyradiomics(image_data: UltrasoundImage, frame: np.ndarray, mask: np.ndarray
     
     cur_frame = frame.copy() # Avoid modifying the original frame
     cur_mask = mask.copy() # Avoid modifying the original mask
+    
+    # Ensure mask matches frame dimensions for Pyradiomics
+    if cur_mask.ndim == 2 and cur_frame.ndim == 3:
+        # Broadcast 2D mask to 3D to match (Depth, Height, Width)
+        # Assuming spatial dimensions are last two
+        if cur_mask.shape == cur_frame.shape[1:]:
+            cur_mask = np.repeat(cur_mask[np.newaxis, :, :], cur_frame.shape[0], axis=0)
+
     min_intensity = kwargs['min_intensity']
     bin_width = kwargs['binwidth']
 
