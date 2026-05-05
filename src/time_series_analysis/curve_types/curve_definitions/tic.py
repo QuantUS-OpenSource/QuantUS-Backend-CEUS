@@ -20,5 +20,9 @@ def tic(image_data: UltrasoundImage, frame: np.ndarray, mask: np.ndarray, **kwar
     """
     assert isinstance(image_data, UltrasoundImage), "image_data must be an instance of UltrasoundImage"
     
-    tic_curve = np.mean(frame[mask > 0], axis=0)
-    return ['TIC'], [tic_curve]
+    # Calculate mean intensity over the mask
+    # For 2D frame and 2D mask, frame[mask > 0] is a 1D array of pixels
+    # For 3D frame and 3D mask, frame[mask > 0] is a 1D array of pixels
+    tic_val = np.mean(frame[mask > 0])
+    
+    return ['TIC'], [tic_val]
