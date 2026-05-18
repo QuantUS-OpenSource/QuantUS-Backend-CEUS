@@ -222,6 +222,7 @@ def view_heatmap(
     image_data,
     time_point: Optional[int] = None,
     seg_mask: Optional[np.ndarray] = None,
+    title_name: str = 'T0 Map',
     colormap: str = 'turbo',
     t0_opacity: float = 0.7,
     percentile_range: tuple = (2, 98),
@@ -284,7 +285,7 @@ def view_heatmap(
         _, vmax = np.percentile(valid, list(percentile_range))
         viewer.add_image(
             t0_display,
-            name='T0 Map',
+            name=title_name,
             colormap=colormap,
             contrast_limits=[0, vmax],
             opacity=t0_opacity,
