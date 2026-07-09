@@ -5,6 +5,7 @@ Interactive 3D viewer for parametric maps
 
 import numpy as np
 import napari
+import matplotlib.pyplot as plt
 from typing import Optional, List
 
 # ============================================================================
