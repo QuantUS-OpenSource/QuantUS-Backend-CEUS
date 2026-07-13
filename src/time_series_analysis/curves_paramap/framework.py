@@ -127,19 +127,18 @@ class CurvesParamapAnalysis(CurvesAnalysis):
                     cor_start_shifted = cor_start + dz
                     cor_end_shifted = cor_end + dz
                     
-                    # Create mask at SHIFTED window location
-                    mask = np.zeros_like(self.seg_data.seg_mask)
-                    
                     # Bounds checking
-                    if (0 <= sag_start_shifted < mask.shape[0] and sag_end_shifted <= mask.shape[0] and
-                        0 <= cor_start_shifted < mask.shape[1] and cor_end_shifted <= mask.shape[1] and
-                        0 <= ax_start_shifted < mask.shape[2] and ax_end_shifted <= mask.shape[2]):
-                        
-                        mask[sag_start_shifted:sag_end_shifted+1, 
-                            cor_start_shifted:cor_end_shifted+1, 
-                            ax_start_shifted:ax_end_shifted+1] = 1
-                        
-                        self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    if (0 <= sag_start_shifted < frame_data.shape[0] and sag_end_shifted <= frame_data.shape[0] and
+                        0 <= cor_start_shifted < frame_data.shape[1] and cor_end_shifted <= frame_data.shape[1] and
+                        0 <= ax_start_shifted < frame_data.shape[2] and ax_end_shifted <= frame_data.shape[2]):
+
+                        # Slice the box directly instead of allocating a full-volume mask
+                        frame_slice = frame_data[sag_start_shifted:sag_end_shifted+1,
+                                                  cor_start_shifted:cor_end_shifted+1,
+                                                  ax_start_shifted:ax_end_shifted+1]
+                        mask_slice = np.ones_like(frame_slice, dtype=bool)
+
+                        self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
                     
         elif self.image_data.intensities_for_analysis.ndim == 3: # 2D + time
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[0])), 
@@ -162,17 +161,16 @@ class CurvesParamapAnalysis(CurvesAnalysis):
                     sag_start_shifted = sag_start + dy
                     sag_end_shifted = sag_end + dy
                     
-                    # Create mask at SHIFTED window location
-                    mask = np.zeros_like(self.seg_data.seg_mask)
-                    
                     # Bounds checking
-                    if (0 <= ax_start_shifted < mask.shape[0] and ax_end_shifted <= mask.shape[0] and
-                        0 <= sag_start_shifted < mask.shape[1] and sag_end_shifted <= mask.shape[1]):
-                        
-                        mask[ax_start_shifted:ax_end_shifted+1, 
-                            sag_start_shifted:sag_end_shifted+1] = 1
-                        
-                        self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    if (0 <= ax_start_shifted < frame_data.shape[0] and ax_end_shifted <= frame_data.shape[0] and
+                        0 <= sag_start_shifted < frame_data.shape[1] and sag_end_shifted <= frame_data.shape[1]):
+
+                        # Slice the box directly instead of allocating a full-volume mask
+                        frame_slice = frame_data[ax_start_shifted:ax_end_shifted+1,
+                                                  sag_start_shifted:sag_end_shifted+1]
+                        mask_slice = np.ones_like(frame_slice, dtype=bool)
+
+                        self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
         else:
             raise ValueError("Image data must be either 2D+time or 3D+time.")
         
