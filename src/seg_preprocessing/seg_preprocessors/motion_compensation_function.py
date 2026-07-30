@@ -18,9 +18,15 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
         search_margin_ratio (float): Search margin ratio (default: 0.5/30)
         padding (int): Padding around bounding box (default: 5)
         shift_order (int): Interpolation order for shifting (default: 0 for nearest neighbor)
-        precompute_mc_mask (bool): If True, create full 4D mc_seg_mask (uses ~36 GB). 
+        precompute_mc_mask (bool): If True, create full 4D mc_seg_mask (uses ~36 GB).
                                     If False (default), only store vectors (uses ~10 KB)
-    
+        n_splits (Tuple[int,int,int]): ROI grid for block-wise tracking (default: (3, 3, 2)).
+                                    Large ROIs are tiled into this many sub-blocks per axis;
+                                    each is tracked independently and blocks whose track
+                                    reaches the image edge, or whose correlation is too low,
+                                    are dropped before averaging.
+        min_correlation (float): Minimum mean correlation for a sub-block to be kept (default: 0.5)
+
     Returns:
         CeusSeg: Segmentation with motion compensation info stored
     """
@@ -31,6 +37,8 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     padding = kwargs.get('padding', 5)
     shift_order = kwargs.get('shift_order', 0)  # 0=nearest neighbor for masks
     precompute_mc_mask = kwargs.get('precompute_mc_mask', False)  # Default: memory efficient
+    n_splits = kwargs.get('n_splits', (3, 3, 2))
+    min_correlation = kwargs.get('min_correlation', 0.5)
     
     # Validate inputs
     if not isinstance(bmode_image_data, UltrasoundImage):
@@ -69,7 +77,8 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
 
     mc = MotionCompensation3D(
         search_margin_ratio=search_margin_ratio,
-        use_reference_only = True
+        use_reference_only=True,
+        n_splits=n_splits
     )
     
     # Track motion - volumes are (X,Y,Z) - (Lateral, Depth, Elevational)
