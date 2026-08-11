@@ -86,6 +86,7 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
         bmode_image_data.pixel_data,
         reference_frame,
         reference_bbox
+        # min_correlation=min_correlation
     )
     
     # Step 3: Calculate translation vectors (memory efficient!)
