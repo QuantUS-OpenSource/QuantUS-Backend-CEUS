@@ -4,25 +4,42 @@ Coronal/sagittal-guided adaptive-bbox 3D mask reconstruction.
 Used wherever a full (X, Y, Z) MedSAM2 mask is needed for one CEUS frame —
 the napari 4D viewer and the TIC analysis both need this, so the
 reconstruction logic lives here once instead of being copy-pasted across
-notebook cells.
+notebook cells. Also usable directly as an interactive Frame/Slice viewer
+(Medsam2SliceViewerBase, medsam2_viewer_base.py), same as the other two
+MedSAM2 approaches.
 
 Pipeline per frame:
   1) Segment the coronal slice at y_mid and the sagittal slice at x_mid using
      SAM2's 2D image predictor with the tracked 3D bbox as the box prompt.
   2) For every axial slice z in [bbox.z_min, bbox.z_max), derive a tight
      "adaptive" bbox from those two masks' active extent at that z, then run
-     the 2D image predictor on that axial slice with the adaptive bbox.
+     the 2D image predictor on that axial slice with the adaptive bbox. A
+     round tumor's cross-section shrinks near the top/bottom of the tracked
+     volume, so this adaptive box shrinks there too, rather than staying one
+     fixed size through the whole stack.
   3) Stack the per-slice axial predictions into a 3D mask.
 
-(This is deliberately separate from medsam2_video_viewer.py, which mirrors
-the independent per-plane 2D inference cell exactly and has no notion of a
-full 3D mask — a volumetric mask is only needed here, for napari display and
-TIC computation.)
+Like Medsam2IndependentPlaneViewer (medsam2_video_viewer.py), every one of
+those calls -- coronal, sagittal, and every axial slice -- is still an
+independent 2D image-predictor call with no memory linking one slice to the
+next; only Medsam2AxialPropagationViewer (medsam2_axial_propagation.py) has
+real cross-slice memory.
+
+The interactive viewer here supports all three planes, but only Axial is
+computed directly (step 2/3 above) -- Coronal/Sagittal are a different-axis
+re-slice of the already-built (X, Y, Z) mask_3d, not a new independent SAM2
+call on those planes. The only real inference on coronal/sagittal is the
+single guide slice at y_mid/x_mid in step 1, which isn't itself what's
+displayed when you pick those planes here.
 """
+
+import time
 
 import numpy as np
 
-from medsam2_video_viewer import run_medsam2_2d, dice_score  # reuse, don't redefine
+from medsam2_viewer_base import (
+    Medsam2SliceViewerBase, run_medsam2_2d, dice_score, get_plane_slice, smooth_3d_mask,
+)  # reuse, don't redefine
 
 
 def get_adaptive_bbox_at_z(coronal_mask, sagittal_mask, z_abs, volume_shape, padding=4):
@@ -89,41 +106,47 @@ def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4):
     return mask_3d
 
 
-class Medsam2AdaptiveBboxMasker:
-    """Builds one SAM2 image predictor and lazily computes + caches the full
-    3D adaptive-bbox mask per CEUS frame. Shared by the napari 4D viewer and
-    the TIC analysis so the model is only loaded once per notebook section."""
+class Medsam2AdaptiveBboxMasker(Medsam2SliceViewerBase):
+    """
+    Builds one SAM2 image predictor and lazily computes + caches the full
+    3D adaptive-bbox mask per CEUS frame via compute_frame() -- the API the
+    napari 4D viewer and TIC analysis consume directly, unchanged. Also
+    usable as its own interactive Frame/Plane/Slice viewer via show(), same
+    as the other two approaches, since it's now a Medsam2SliceViewerBase
+    subclass -- Coronal/Sagittal here just re-slice the already-computed
+    mask_3d along a different axis, not a new SAM2 call on those planes.
+    """
 
-    def __init__(self, seg_data, bmode_image_data, model_cfg, checkpoint, device="cuda"):
+    SUPPORTED_PLANES = ("Axial", "Coronal", "Sagittal")
+
+    def __init__(self, seg_data, bmode_image_data, model_cfg, checkpoint, device="cuda", smooth_sigma_mm=1.0):
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-        self.seg_data = seg_data
-        self.bmode_image_data = bmode_image_data
         sam2_model = build_sam2(model_cfg, checkpoint, device=device)
         self.image_predictor = SAM2ImagePredictor(sam2_model)
-        self.cache = {}   # frame_idx -> result dict
-
-    def _frame_geometry(self, frame_idx):
-        bbox = self.seg_data.motion_compensation.tracked_bboxes[frame_idx]
-        mc_mask = self.seg_data.motion_compensation.apply_to_mask(
-            self.seg_data.seg_mask, frame_idx, 0
-        )
-        return {
-            "bbox": bbox,
-            "mc_mask": mc_mask,
-            "z_mid": int(np.argmax(mc_mask.sum(axis=(0, 1)))),
-            "y_mid": int(np.argmax(mc_mask.sum(axis=(0, 2)))),
-            "x_mid": int(np.argmax(mc_mask.sum(axis=(1, 2)))),
-        }
+        # 3D Gaussian-smooth the reconstructed mask to remove the axial
+        # per-slice staircase seam (see smooth_3d_mask's docstring) --
+        # 0/None disables it, for an exact comparison against the raw output.
+        self.smooth_sigma_mm = smooth_sigma_mm
+        super().__init__(seg_data, bmode_image_data, device=device)
 
     def compute_frame(self, frame_idx):
+        """Full (X,Y,Z) adaptive-bbox mask + reference mask + whole-volume
+        Dice for one CEUS frame. Unchanged from before this class also
+        became a viewer -- napari and TIC call this directly."""
         if frame_idx in self.cache:
             return self.cache[frame_idx]
 
         geom = self._frame_geometry(frame_idx)
         volume = self.bmode_image_data.pixel_data[:, :, :, frame_idx]        # (X, Y, Z)
+        start = time.time()
         mask_3d = compute_3d_mask(self.image_predictor, volume, geom["bbox"], geom["y_mid"], geom["x_mid"])
+        if self.smooth_sigma_mm:
+            mask_3d = smooth_3d_mask(
+                mask_3d, spacing_xyz=self.bmode_image_data.pixdim, sigma_mm=self.smooth_sigma_mm
+            ).astype(np.uint8)
+        elapsed = time.time() - start
 
         result = {
             "volume": volume,
@@ -131,6 +154,31 @@ class Medsam2AdaptiveBboxMasker:
             "mc_mask": geom["mc_mask"],
             "mask_3d": mask_3d,
             "dice": dice_score(mask_3d, geom["mc_mask"]),
+            "elapsed": elapsed,
         }
         self.cache[frame_idx] = result
         return result
+
+    def _slice_range(self, frame_idx, plane):
+        """
+        Axial is clamped to [bbox.z_min, bbox.z_max) -- the loop range
+        compute_3d_mask actually populates; outside it mask_3d is
+        definitionally all zero. Coronal/Sagittal are clamped to the bbox's
+        Y/X extent for the same reason a wider range wouldn't show anything
+        meaningful: every axial slice's adaptive box is itself derived from
+        (and padded only slightly past) the bbox-prompted coronal/sagittal
+        guide masks, so real mask content isn't expected far outside it.
+        """
+        geom = self._frame_geometry(frame_idx)
+        bbox = geom["bbox"]
+        if plane == "Axial":
+            return geom["z_min"], geom["z_max"] - 1, geom["z_mid"]
+        elif plane == "Coronal":
+            return int(bbox.y_min), int(bbox.y_max) - 1, geom["y_mid"]
+        else:
+            return int(bbox.x_min), int(bbox.x_max) - 1, geom["x_mid"]
+
+    def _get_prediction(self, frame_idx, plane, idx):
+        result = self.compute_frame(frame_idx)
+        pred = get_plane_slice(result["mask_3d"], plane, idx).astype(bool)
+        return {"pred": pred if pred.any() else None, "elapsed": result["elapsed"]}

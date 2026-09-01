@@ -1,34 +1,27 @@
 """
-Interactive frame/plane viewer for independent per-plane 2D MedSAM2 segmentation.
+Shared machinery for the three MedSAM2 slice-viewer approaches:
 
-Mirrors the standalone "2D inference on all 3 planes (axial, coronal,
-sagittal)" cell exactly: for whichever plane is selected, the tracked 3D bbox
-is projected onto that plane's two axes and a single SAM2 2D image-predictor
-call segments that one slice. There is no cross-plane guidance (coronal/
-sagittal do not derive an axial bbox), no per-z "adaptive" bbox, and no
-Z-stack reconstruction/propagation — each (frame, plane, slice index) is
-computed independently and on demand.
+  - Medsam2IndependentPlaneViewer (medsam2_video_viewer.py)  -- independent
+    per-(frame, plane, slice) 2D SAM2 calls, fixed 3D bbox projected onto
+    whichever plane is selected.
+  - Medsam2AdaptiveBboxMasker (medsam2_3d_mask.py)  -- axial mask stack
+    reconstructed from a per-z bbox derived from one coronal + one sagittal
+    2D call, still independent 2D calls per axial slice.
+  - Medsam2AxialPropagationViewer (medsam2_axial_propagation.py)  -- one
+    real SAM2 video-object propagation per CEUS frame through the axial
+    Z-stack, memory-linked across slices.
 
-The UI:
-  - a Frame slider (which CEUS frame),
-  - a Plane toggle (Axial / Coronal / Sagittal),
-  - a Slice slider (which index within that plane — the fixed 3D bbox is
-    projected the same way regardless of index, so this is a faithful
-    generalization of the reference cell's single mid-slice, not a different
-    algorithm),
-  - an "Enhance" checkbox (denoise + percentile contrast stretch for display
-    only; the SAM2 input/prediction always uses plain min-max normalization,
-    since the denoised version was found to segment worse).
-
-Each (frame, plane, slice) prediction is cached so revisiting one is instant.
-
-Usage (inside the notebook, after seg_data/bmode_image_data/model_cfg/checkpoint
-are already defined):
-
-    from medsam2_video_viewer import Medsam2VideoPropViewer
-
-    viewer = Medsam2VideoPropViewer(seg_data, bmode_image_data, model_cfg, checkpoint)
-    viewer.show()
+All three need the same interactive shell: a Frame slider (which CEUS
+frame), optionally a Plane toggle (only the approaches that support more
+than one plane get one), a Slice slider, an Enhance-display checkbox, and a
+matplotlib render of the B-mode slice with the motion-compensated reference
+contour (red) and the MedSAM2 prediction contour (lime dashed), plus a Dice
+status line. What differs between them is only *how a prediction for one
+(frame, plane, slice) is obtained* and *what slice range is valid* --
+independent per-slice inference vs. indexing into an already-computed
+volume, and bbox-clamped vs. full-stack slice ranges. Those two differences
+are the hook methods subclasses must implement; everything else lives here
+once instead of being copy-pasted three times.
 """
 
 import time
@@ -36,11 +29,13 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from scipy.ndimage import binary_erosion
+from scipy.ndimage import binary_erosion, gaussian_filter
 from skimage.restoration import denoise_nl_means, denoise_wavelet, estimate_sigma
 from ipywidgets import IntSlider, ToggleButtons, Checkbox, VBox, HTML, Output
 from IPython.display import display
 
+
+# ── Generic plane/mask/prediction utilities, shared by all three approaches ──
 
 def slice_to_rgb(slice_2d):
     """Normalize a 2D slice to uint8 RGB."""
@@ -145,6 +140,42 @@ def run_medsam2_2d(image_predictor, slice_2d, bbox_2d, device="cuda"):
     return masks[0].astype(bool)
 
 
+def smooth_3d_mask(mask_xyz, spacing_xyz=None, sigma_mm=1.0):
+    """
+    Smooth a binary 3D mask by Gaussian-blurring its float-cast field and
+    re-thresholding at 0.5.
+
+    Both Medsam2AdaptiveBboxMasker and Medsam2AxialPropagationViewer build
+    their 3D mask out of a stack of per-axial-slice 2D predictions (fully
+    independent 2D calls for the former; the video predictor's per-slice
+    output for the latter). Nothing enforces that adjacent slices' boundary
+    contours agree with each other, so the mask can show a visible
+    staircase/"jigsaw" seam when viewed from Coronal/Sagittal -- planes that
+    cut directly across many independently-decided slices. Smoothing the
+    per-slice 2D output on its own wouldn't touch this, since the artifact
+    is *between* slices, not within one; blurring the whole 3D field is
+    what actually blends across the slice axis.
+
+    spacing_xyz, if given, is the physical (mm) voxel spacing per axis, in
+    the same axis order as mask_xyz -- sigma_mm is then converted to a
+    different number of voxels per axis so the smoothing is isotropic in
+    physical space rather than voxel space. Axial in-plane resolution is
+    typically much finer than the through-plane spacing (e.g. ~0.3mm vs
+    ~0.4-0.6mm here), so an equal voxel-count sigma would over-smooth
+    in-plane while barely touching the actual staircase seam.
+    """
+    if mask_xyz.sum() == 0:
+        return mask_xyz.astype(bool)
+
+    if spacing_xyz is None:
+        sigma_voxels = (sigma_mm, sigma_mm, sigma_mm)
+    else:
+        sigma_voxels = tuple(sigma_mm / max(float(s), 1e-6) for s in spacing_xyz)
+
+    prob = gaussian_filter(mask_xyz.astype(np.float32), sigma=sigma_voxels)
+    return prob > 0.5
+
+
 def project_bbox_to_plane(bbox, plane):
     """Project the tracked 3D bbox onto one plane — same formulas as the
     reference "2D inference on all 3 planes" cell for each orientation."""
@@ -170,23 +201,33 @@ def get_plane_slice(volume_xyz, plane, idx):
         return volume_xyz[idx, :, :]        # (Y, Z)
 
 
-class Medsam2VideoPropViewer:
-    """Frame slider + plane toggle + slice slider over independent per-plane 2D SAM2 segmentation."""
+# ── Shared interactive-viewer shell ──
 
-    PLANES = ("Axial", "Coronal", "Sagittal")
+class Medsam2SliceViewerBase:
+    """
+    Frame slider (+ Plane toggle, if SUPPORTED_PLANES has more than one) +
+    Slice slider, rendering the B-mode slice with the MC reference contour
+    (red) and the MedSAM2 prediction contour (lime dashed).
 
-    def __init__(self, seg_data, bmode_image_data, model_cfg, checkpoint, device="cuda"):
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
+    Subclasses must implement:
+      _get_prediction(frame_idx, plane, idx) -> dict with at least
+          {"pred": (H,W) bool mask or None, "elapsed": float}
+          (extra keys are fine -- passed through to _status_note/_draw_extra)
+      _slice_range(frame_idx, plane) -> (lo, hi, default)
 
+    Subclasses may optionally override:
+      _status_note(frame_idx, plane, idx, result) -> str appended to the status line
+      _draw_extra(ax, frame_idx, plane, idx, result) -> extra matplotlib annotations
+    """
+
+    SUPPORTED_PLANES = ("Axial",)
+
+    def __init__(self, seg_data, bmode_image_data, device="cuda"):
         self.seg_data = seg_data
         self.bmode_image_data = bmode_image_data
         self.device = device
-        sam2_model = build_sam2(model_cfg, checkpoint, device=device)
-        self.image_predictor = SAM2ImagePredictor(sam2_model)
-        self.cache = {}   # (frame_idx, plane, idx) -> {"pred": mask|None, "elapsed": float}
         self.n_frames = bmode_image_data.pixel_data.shape[-1]
-        self.volume_shape = bmode_image_data.pixel_data.shape[:3]   # (X, Y, Z)
+        self.cache = {}
 
         self.status = HTML(value="")
         self.out = Output()
@@ -196,29 +237,35 @@ class Medsam2VideoPropViewer:
             description="Frame:", continuous_update=False,
             layout={"width": "500px"},
         )
-        self.plane_toggle = ToggleButtons(options=list(self.PLANES), description="Plane:")
+        self.frame_slider.observe(self._on_context_change, names="value")
+
+        if len(self.SUPPORTED_PLANES) > 1:
+            self.plane_toggle = ToggleButtons(options=list(self.SUPPORTED_PLANES), description="Plane:")
+            self.plane_toggle.observe(self._on_context_change, names="value")
+        else:
+            self.plane_toggle = None
+
         self.slice_slider = IntSlider(
             description="Slice:", continuous_update=False,
             layout={"width": "500px"},
         )
-        self.enhance_checkbox = Checkbox(value=False, description="Enhance display (denoise + contrast)")
-
-        self.frame_slider.observe(self._on_context_change, names="value")
-        self.plane_toggle.observe(self._on_context_change, names="value")
         self.slice_slider.observe(self._on_slice_change, names="value")
+
+        self.enhance_checkbox = Checkbox(value=False, description="Enhance display (denoise + contrast)")
         self.enhance_checkbox.observe(self._on_slice_change, names="value")
 
-        self.ui = VBox([
-            self.frame_slider,
-            self.plane_toggle,
-            self.slice_slider,
-            self.enhance_checkbox,
-            self.status,
-            self.out,
-        ])
+        widgets = [self.frame_slider]
+        if self.plane_toggle is not None:
+            widgets.append(self.plane_toggle)
+        widgets += [self.slice_slider, self.enhance_checkbox, self.status, self.out]
+        self.ui = VBox(widgets)
+
+    def _current_plane(self):
+        return self.plane_toggle.value if self.plane_toggle is not None else self.SUPPORTED_PLANES[0]
 
     def _frame_geometry(self, frame_idx):
-        """Cheap per-frame info (bbox + mid-slice indices) — no SAM2 inference."""
+        """Cheap per-frame info (bbox + mc mask + mid-slice indices) shared
+        by every subclass's prompt/range logic -- no SAM2 inference."""
         bbox = self.seg_data.motion_compensation.tracked_bboxes[frame_idx]
         mc_mask = self.seg_data.motion_compensation.apply_to_mask(
             self.seg_data.seg_mask, frame_idx, 0
@@ -232,30 +279,38 @@ class Medsam2VideoPropViewer:
             "x_mid": int(np.argmax(mc_mask.sum(axis=(1, 2)))),
         }
 
-    def _get_prediction(self, frame_idx, volume, bbox, plane, idx):
-        key = (frame_idx, plane, idx)
-        if key not in self.cache:
-            slice_2d = get_plane_slice(volume, plane, idx)
-            box = project_bbox_to_plane(bbox, plane)
-            start = time.time()
-            pred = run_medsam2_2d(self.image_predictor, slice_2d, box, device=self.device)
-            elapsed = time.time() - start
-            self.cache[key] = {"pred": pred, "elapsed": elapsed}
-        return self.cache[key]
+    # ── hooks subclasses must implement ──
+
+    def _get_prediction(self, frame_idx, plane, idx):
+        raise NotImplementedError
+
+    def _slice_range(self, frame_idx, plane):
+        raise NotImplementedError
+
+    # ── hooks subclasses may optionally override ──
+
+    def _status_note(self, frame_idx, plane, idx, result):
+        return ""
+
+    def _draw_extra(self, ax, frame_idx, plane, idx, result):
+        pass
+
+    # ── shared UI wiring ──
+
+    @staticmethod
+    def _plane_axis_labels(plane, idx):
+        if plane == "Axial":
+            return f"Axial (Z={idx})", "Lateral (X)", "Depth (Y)"
+        elif plane == "Coronal":
+            return f"Coronal (Y={idx})", "Elevation (Z)", "Lateral (X)"
+        else:
+            return f"Sagittal (X={idx})", "Elevation (Z)", "Depth (Y)"
 
     def _sync_slice_slider(self):
         """Reset the slice slider's range/default to match the current frame + plane."""
         frame_idx = self.frame_slider.value
-        plane = self.plane_toggle.value
-        geom = self._frame_geometry(frame_idx)
-        x_dim, y_dim, _ = self.volume_shape
-
-        if plane == "Axial":
-            lo, hi, default = geom["z_min"], geom["z_max"] - 1, geom["z_mid"]
-        elif plane == "Coronal":
-            lo, hi, default = 0, y_dim - 1, geom["y_mid"]
-        else:
-            lo, hi, default = 0, x_dim - 1, geom["x_mid"]
+        plane = self._current_plane()
+        lo, hi, default = self._slice_range(frame_idx, plane)
 
         # Set in an order that never puts min > max transiently.
         self.slice_slider.min = min(lo, self.slice_slider.max, self.slice_slider.min)
@@ -272,7 +327,7 @@ class Medsam2VideoPropViewer:
 
     def _render(self):
         frame_idx = self.frame_slider.value
-        plane = self.plane_toggle.value
+        plane = self._current_plane()
         idx = self.slice_slider.value
 
         geom = self._frame_geometry(frame_idx)
@@ -280,16 +335,10 @@ class Medsam2VideoPropViewer:
 
         img = get_plane_slice(volume, plane, idx)
         mc = get_plane_slice(geom["mc_mask"], plane, idx)
-        result = self._get_prediction(frame_idx, volume, geom["bbox"], plane, idx)
-        pred = result["pred"]
+        result = self._get_prediction(frame_idx, plane, idx)
+        pred = result.get("pred")
 
-        if plane == "Axial":
-            title, xlabel, ylabel = f"Axial (Z={idx})", "Lateral (X)", "Depth (Y)"
-        elif plane == "Coronal":
-            title, xlabel, ylabel = f"Coronal (Y={idx})", "Elevation (Z)", "Lateral (X)"
-        else:
-            title, xlabel, ylabel = f"Sagittal (X={idx})", "Elevation (Z)", "Depth (Y)"
-
+        title, xlabel, ylabel = self._plane_axis_labels(plane, idx)
         disp = enhance_bmode_noise(img) if self.enhance_checkbox.value else slice_to_rgb(img)[..., 0]
 
         with self.out:
@@ -297,8 +346,9 @@ class Medsam2VideoPropViewer:
             fig, ax = plt.subplots(figsize=(6, 6))
             ax.imshow(disp, cmap="gray")
             ax.contour(get_mask_boundary(mc.astype(bool)), colors="red", linewidths=2)
-            if pred is not None:
+            if pred is not None and np.any(pred):
                 ax.contour(get_mask_boundary(pred), colors="lime", linewidths=2, linestyles="dashed")
+            self._draw_extra(ax, frame_idx, plane, idx, result)
             ax.set_title(f"Frame {frame_idx} — {title}", fontsize=12)
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)
@@ -306,10 +356,11 @@ class Medsam2VideoPropViewer:
             plt.show()
 
         dice = dice_score(pred, mc) if pred is not None else float("nan")
-        note = "" if pred is not None else " (bbox degenerate on this plane)"
+        note = self._status_note(frame_idx, plane, idx, result)
+        elapsed = result.get("elapsed", float("nan"))
         self.status.value = (
             f"Frame {frame_idx} | {plane} slice {idx} | Dice vs MC (this slice): {dice:.3f}{note} | "
-            f"segmentation time: {result['elapsed']:.2f}s "
+            f"prediction time: {elapsed:.2f}s "
             f"(red = MC reference, lime dashed = MedSAM2 mask)"
         )
 
