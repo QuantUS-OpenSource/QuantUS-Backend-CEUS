@@ -89,6 +89,32 @@ def find_bmode_file(data_dir, visit, bolus):
     )
 
 
+def find_voi_file(data_dir, visit, bolus):
+    """
+    Locate the *-MC_VOI.nii.gz reference-segmentation file for one (visit,
+    bolus) case -- same directory-resolution and strict/loose glob strategy
+    as find_bmode_file, since it lives alongside the BMODE/CEUS files and is
+    affected by the same site-prefix irregularities (e.g. CSV Site="TJU" vs
+    the actual file prefix "TJUH" for TJU-P014 -- the glob patterns below
+    don't require site or patient number to match at all, only visit+bolus
+    within the already patient-scoped data_dir, which is what makes this
+    robust to that kind of mismatch).
+    """
+    base_dir = re.sub(r"/V\d+/?$", "", data_dir.rstrip("/"))
+    candidate_dirs = [os.path.join(base_dir, visit), base_dir]
+
+    for pattern_tail in (f"*{visit}-{bolus}-MC_VOI.nii.gz", f"*{visit}-{bolus}*MC_VOI.nii.gz"):
+        for search_dir in candidate_dirs:
+            matches = sorted(glob.glob(os.path.join(search_dir, pattern_tail)))
+            if len(matches) == 1:
+                return matches[0]
+
+    raise FileNotFoundError(
+        f"Expected exactly 1 MC_VOI file for visit={visit!r} bolus={bolus!r} "
+        f"searched in {candidate_dirs!r}"
+    )
+
+
 def find_ceus_file(bmode_path):
     """
     Locate the *_CEUS.nii file paired with a resolved *_BMODE.nii path.
