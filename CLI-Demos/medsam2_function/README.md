@@ -64,8 +64,10 @@ Run the converter:
 ```bash
 cd engines/ceus/CLI-Demos
 python build_npz_dataset.py \
-    --processed-root /path/to/MedSAM2_finetune_data/processed \
-    --output-dir /path/to/MedSAM2_finetune_data/npz_train
+--processed-root /media/ahmed-el-kaffas/20TB-HDD/Yuanshan/3DMPUS/MedSAM2_finetune_data/processed \
+--output-dir /media/ahmed-el-kaffas/20TB-HDD/Yuanshan/3DMPUS/MedSAM2_finetune_data/npz_train \
+--holdout-dir /media/ahmed-el-kaffas/20TB-HDD/Yuanshan/3DMPUS/MedSAM2_finetune_data/npz_holdout \
+--holdout-subjects subject_000003 subject_000006 subject_000008
 ```
 
 It scans every `{subject_id}/{sequence_id}/`, skips any case whose
@@ -73,13 +75,35 @@ It scans every `{subject_id}/{sequence_id}/`, skips any case whose
 for the rest. Re-run it any time you label more cases — it's safe to
 overwrite the output directory.
 
-**Held-out cases:** before pointing the config at this folder, pull a couple
-of cases out into a separate `npz_holdout/` folder so you have something
-fine-tuning never saw, to sanity-check the result on. Split by **subject**,
-not sequence — several subjects have multiple labeled sequences, and if you
-hold out one sequence from a subject while training on another sequence
-from the *same* subject, the holdout check is contaminated (the model may
-have effectively already seen that patient's anatomy).
+**Held-out cases:** pass `--holdout-subjects` and `--holdout-dir` so the split
+is made in the same pass that writes the files:
+
+```bash
+python build_npz_dataset.py \
+    --processed-root /path/to/MedSAM2_finetune_data/processed \
+    --output-dir     /path/to/MedSAM2_finetune_data/npz_train \
+    --holdout-dir    /path/to/MedSAM2_finetune_data/npz_holdout \
+    --holdout-subjects subject_000003 subject_000006 subject_000008
+```
+
+Split by **subject**, never by sequence — most subjects have several labeled
+sequences of the same lesion at a different visit or bolus, so holding out one
+sequence while training on another from that patient means the model has
+already seen the anatomy. Naming a subject holds out *every* sequence of that
+subject; naming one that has no labels yet is fine and future-proofs the rebuild.
+
+**Do not re-run this script with only `--output-dir` once a holdout exists.**
+It walks the whole `processed/` tree, so that writes every labeled case into
+the training folder and silently sweeps the held-out cases back in. With the
+holdout flags the routing is applied per case and any stale copy in the other
+folder is deleted, so re-running is idempotent — and re-running *with* the
+flags repairs a split that was already contaminated. The chosen split is
+recorded in `split.json` next to the two folders.
+
+`medsam2_gt_eval.discover_cases` reads which `.npz` files are in `npz_train/`
+to decide each case's tier, so that folder is the record of what the trainer
+actually saw — which is why the split lives in the filesystem rather than in a
+config flag.
 
 ## Step 3 — Configure the YAML
 

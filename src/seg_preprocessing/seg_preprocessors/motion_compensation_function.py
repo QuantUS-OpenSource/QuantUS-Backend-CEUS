@@ -82,11 +82,11 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     )
     
     # Track motion - volumes are (X,Y,Z) - (Lateral, Depth, Elevational)
-    tracked_bboxes, correlations = mc.track_motion_ilsa_3d(
+    tracked_bboxes, correlations = mc.track_motion_blockwise_3d(
         bmode_image_data.pixel_data,
         reference_frame,
-        reference_bbox
-        # min_correlation=min_correlation
+        reference_bbox,
+        min_correlation=min_correlation
     )
     
     # Step 3: Calculate translation vectors (memory efficient!)

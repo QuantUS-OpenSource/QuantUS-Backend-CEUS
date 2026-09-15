@@ -62,6 +62,7 @@ import torch.nn.functional as F
 
 from medsam2_viewer_base import (
     Medsam2SliceViewerBase, project_bbox_to_plane, get_plane_slice, smooth_3d_mask,
+    dice_score,
 )
 
 IMG_MEAN = (0.485, 0.456, 0.406)
@@ -202,8 +203,37 @@ class Medsam2AxialPropagationViewer(Medsam2SliceViewerBase):
         pred_xyz = np.transpose(mask_zyx, (2, 1, 0))
 
         result = {"pred_xyz": pred_xyz, "key_slice": key_slice, "box": box,
-                  "mc_mask": geom["mc_mask"], "elapsed": elapsed}
+                  "bbox": bbox, "mc_mask": geom["mc_mask"], "elapsed": elapsed}
         self.cache[frame_idx] = result
+        return result
+
+    def compute_frame(self, frame_idx):
+        """
+        The same per-frame contract as `Medsam2AdaptiveBboxMasker.compute_frame`
+        -- `mask_3d` (X, Y, Z) uint8, plus `mc_mask`, `bbox`, `dice` and
+        `elapsed` -- so anything written against that masker takes this
+        propagation viewer with no other change: the napari 4D viewer, the TIC
+        analysis, and `medsam2_2d_temporal_roi.evaluate_2d_case`.
+
+        Worth knowing when swapping the two for a comparison: this class
+        reaches the same (X, Y, Z) mask by a different route. The adaptive
+        masker derives a per-z box from one coronal and one sagittal guide
+        slice and then runs an independent 2D call per axial slice, so its
+        accuracy at the tapering ends of the lesion rests entirely on those
+        two guides. Here a single box seeds one true SAM2 video propagation
+        through the axial stack, with memory linking the slices, and the
+        result is hard-clipped to the tracked bbox.
+
+        The derived keys are written back into the cached `_propagate_frame`
+        result so the volume Dice is computed once per frame rather than on
+        every access. `volume` is deliberately absent even though the adaptive
+        masker returns it -- this cache already holds a full-volume mask per
+        frame, doubling that for a key no consumer reads is not worth it.
+        """
+        result = self._propagate_frame(frame_idx)
+        if "mask_3d" not in result:
+            result["mask_3d"] = result["pred_xyz"].astype(np.uint8)
+            result["dice"] = dice_score(result["mask_3d"], result["mc_mask"])
         return result
 
     def _slice_range(self, frame_idx, plane):
