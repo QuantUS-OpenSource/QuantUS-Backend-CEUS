@@ -115,17 +115,24 @@ class CurvesParamapAnalysis(CurvesAnalysis):
                 else:
                     dx, dy, dz = 0, 0, 0
                 
+                # Voxels outside the imaged sector carry no signal, so exclude
+                # them from the window rather than averaging padding into it.
+                sector = (self.seg_data.motion_compensation.sector_mask
+                          if self.seg_data.use_mc else None)
+
                 for window_ix, window in enumerate(self.windows):
                     # SHIFT window location by motion vector
                     ax_start, sag_start, cor_start, ax_end, sag_end, cor_end = window
-                    
-                    # Apply motion compensation to window coordinates
-                    ax_start_shifted = ax_start + dx
-                    ax_end_shifted = ax_end + dx
-                    sag_start_shifted = sag_start + dy
-                    sag_end_shifted = sag_end + dy
-                    cor_start_shifted = cor_start + dz
-                    cor_end_shifted = cor_end + dz
+
+                    # Apply motion compensation to window coordinates. The
+                    # translation's component i shifts axis i of frame_data, so
+                    # axis 0 takes dx, axis 1 dy, axis 2 dz.
+                    sag_start_shifted = sag_start + dx
+                    sag_end_shifted = sag_end + dx
+                    cor_start_shifted = cor_start + dy
+                    cor_end_shifted = cor_end + dy
+                    ax_start_shifted = ax_start + dz
+                    ax_end_shifted = ax_end + dz
                     
                     # Bounds checking
                     if (0 <= sag_start_shifted < frame_data.shape[0] and sag_end_shifted <= frame_data.shape[0] and
@@ -133,10 +140,17 @@ class CurvesParamapAnalysis(CurvesAnalysis):
                         0 <= ax_start_shifted < frame_data.shape[2] and ax_end_shifted <= frame_data.shape[2]):
 
                         # Slice the box directly instead of allocating a full-volume mask
-                        frame_slice = frame_data[sag_start_shifted:sag_end_shifted+1,
-                                                  cor_start_shifted:cor_end_shifted+1,
-                                                  ax_start_shifted:ax_end_shifted+1]
-                        mask_slice = np.ones_like(frame_slice, dtype=bool)
+                        box = (slice(sag_start_shifted, sag_end_shifted + 1),
+                               slice(cor_start_shifted, cor_end_shifted + 1),
+                               slice(ax_start_shifted, ax_end_shifted + 1))
+                        frame_slice = frame_data[box]
+                        if sector is None:
+                            mask_slice = np.ones_like(frame_slice, dtype=bool)
+                        else:
+                            # An all-False mask is passed through rather than
+                            # skipped: every window must contribute one point per
+                            # frame or its curve silently loses its time axis.
+                            mask_slice = sector[box]
 
                         self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
                     

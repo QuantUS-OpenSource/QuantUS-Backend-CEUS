@@ -345,7 +345,7 @@ class Medsam2SliceViewerBase:
             self.out.clear_output(wait=True)
             fig, ax = plt.subplots(figsize=(6, 6))
             ax.imshow(disp, cmap="gray")
-            ax.contour(get_mask_boundary(mc.astype(bool)), colors="red", linewidths=2)
+            # ax.contour(get_mask_boundary(mc.astype(bool)), colors="red", linewidths=2)
             if pred is not None and np.any(pred):
                 ax.contour(get_mask_boundary(pred), colors="lime", linewidths=2, linestyles="dashed")
             self._draw_extra(ax, frame_idx, plane, idx, result)

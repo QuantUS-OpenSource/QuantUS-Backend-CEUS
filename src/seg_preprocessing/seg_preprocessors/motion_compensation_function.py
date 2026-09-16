@@ -1,10 +1,11 @@
 from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
 from ...data_objs.seg import CeusSeg
-from ..motion_compensation_3d import MotionCompensation3D, BoundingBox3D, MotionCompensationResult
+from ..motion_compensation_3d import (MotionCompensation3D, BoundingBox3D,
+                                      MotionCompensationResult, compute_sector_mask)
 import numpy as np
 
-@required_kwargs('bmode_image_data','search_margin_ratio','padding')
+@required_kwargs('bmode_image_data','search_margin','padding','reference_frame')
 def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwargs) -> CeusSeg:
     """
     Apply 3D motion compensation using ILSA tracking.
@@ -15,7 +16,10 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     Kwargs:
         bmode_image_data (UltrasoundImage): B-mode data for motion tracking [REQUIRED]
         reference_frame (int): Reference frame index (default: 0)
-        search_margin_ratio (float): Search margin ratio (default: 0.5/30)
+        search_margin (Tuple[int,int,int]): Per-axis (X, Y, Z) search margin in
+                                    voxels (default: (5, 5, 5)). This is the largest
+                                    per-frame displacement findable on each axis; raise
+                                    the Z entry for large out-of-plane motion.
         padding (int): Padding around bounding box (default: 5)
         shift_order (int): Interpolation order for shifting (default: 0 for nearest neighbor)
         precompute_mc_mask (bool): If True, create full 4D mc_seg_mask (uses ~36 GB).
@@ -26,6 +30,13 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
                                     reaches the image edge, or whose correlation is too low,
                                     are dropped before averaging.
         min_correlation (float): Minimum mean correlation for a sub-block to be kept (default: 0.5)
+        use_gpu (bool): Run the 3D correlation on the GPU via CuPy (default: True).
+                                    Falls back to CPU if CuPy/CUDA is unavailable.
+        use_reference_only (bool): If True, every frame is matched against the
+                                    reference-frame template. If False (default), ILSA also
+                                    tries the neighbouring frame's template and keeps whichever
+                                    correlates better, which tracks large cumulative motion and
+                                    gradual appearance change far better.
 
     Returns:
         CeusSeg: Segmentation with motion compensation info stored
@@ -33,12 +44,14 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     # Extract kwargs
     bmode_image_data = kwargs['bmode_image_data']
     reference_frame = kwargs.get('reference_frame', 0)
-    search_margin_ratio = kwargs.get('search_margin_ratio', 0.5 / 25)
     padding = kwargs.get('padding', 5)
     shift_order = kwargs.get('shift_order', 0)  # 0=nearest neighbor for masks
     precompute_mc_mask = kwargs.get('precompute_mc_mask', False)  # Default: memory efficient
     n_splits = kwargs.get('n_splits', (3, 3, 2))
     min_correlation = kwargs.get('min_correlation', 0.5)
+    use_gpu = kwargs.get('use_gpu', True)
+    search_margin = kwargs.get('search_margin', (5, 5, 5))
+    use_reference_only = kwargs.get('use_reference_only', False)
     
     # Validate inputs
     if not isinstance(bmode_image_data, UltrasoundImage):
@@ -73,16 +86,17 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     # Step 2: Track motion using forward and backward correlation
     print("\nStep 2: Tracking motion using forward and backward correlation...")
     print(f"  Reference frame: {reference_frame}")
-    print(f"  Search margin ratio: {search_margin_ratio}")
+    print(f"  Search margin: {tuple(search_margin)} voxels (X, Y, Z)")
 
     mc = MotionCompensation3D(
-        search_margin_ratio=search_margin_ratio,
-        use_reference_only=True,
-        n_splits=n_splits
+        search_margin=search_margin,
+        use_reference_only=use_reference_only,
+        n_splits=n_splits,
+        use_gpu=use_gpu
     )
     
     # Track motion - volumes are (X,Y,Z) - (Lateral, Depth, Elevational)
-    tracked_bboxes, correlations = mc.track_motion_blockwise_3d(
+    tracked_bboxes, correlations, translations = mc.track_motion_blockwise_3d(
         bmode_image_data.pixel_data,
         reference_frame,
         reference_bbox,
@@ -93,18 +107,15 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     print("\nStep 3: Computing translation vectors...")
     n_frames = bmode_shape[-1]
     
-    # Store translation vectors instead of full mask
+    # Store translation vectors instead of full mask. These come straight from
+    # the tracker's own shifts, not from differencing tracked_bboxes' centers:
+    # those boxes are clipped to the volume, which truncates a large ROI on one
+    # side only and damps the motion it appears to have undergone.
     translation_vectors = np.zeros((n_frames, 3), dtype=np.float32)
-    ref_center = reference_bbox.center
     
     for frame_idx in range(n_frames):
-        bbox = tracked_bboxes[frame_idx]
-        curr_center = bbox.center
-        
-        # Calculate shift from reference (these are the motion compensation vectors)
-        translation_vectors[frame_idx, 0] = curr_center[0] - ref_center[0]  # dz
-        translation_vectors[frame_idx, 1] = curr_center[1] - ref_center[1]  # dy
-        translation_vectors[frame_idx, 2] = curr_center[2] - ref_center[2]  # dx
+        # (X, Y, Z) = (lateral, depth, elevational), matching the volume axes
+        translation_vectors[frame_idx] = translations[frame_idx]
         
         if frame_idx % 10 == 0 or frame_idx == n_frames - 1:
             print(f"  Frame {frame_idx}: shift=({translation_vectors[frame_idx, 0]:.1f}, "
@@ -117,7 +128,8 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
         reference_frame=reference_frame,
         correlations=np.array(correlations, dtype=np.float32),
         reference_bbox=reference_bbox,
-        tracked_bboxes=tracked_bboxes
+        tracked_bboxes=tracked_bboxes,
+        sector_mask=compute_sector_mask(bmode_image_data.pixel_data, reference_frame)
     )
     
     # Store motion compensation result in seg_data

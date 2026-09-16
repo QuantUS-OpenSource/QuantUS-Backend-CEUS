@@ -9,7 +9,9 @@ Shows, all in one viewer with a frame slider driving every layer:
   - the MedSAM2 predicted mask for the current frame (adaptive-bbox
     reconstruction from medsam2_3d_mask.py),
   - the tracked 3D bounding box for the current frame, as a wireframe of its
-    six faces.
+    six faces,
+  - a white wireframe cube around the whole ultrasound field, so the volume
+    reads as a volume rather than a floating cloud (as in MC_figure.ipynb).
 
 Usage (inside the notebook, after seg_data/image_data/bmode_image_data/
 model_cfg/checkpoint are already defined):
@@ -48,23 +50,43 @@ def bbox_faces_zyx(bbox):
 class Medsam2Napari4DViewer:
     """One napari viewer, one frame slider, driving CEUS/original-mask/MC-mask/predicted-mask/bbox layers."""
 
-    def __init__(self, seg_data, image_data, bmode_image_data, model_cfg, checkpoint, device="cuda"):
+    def __init__(self, seg_data, image_data, bmode_image_data, model_cfg, checkpoint, device="cuda",
+                 ndisplay=3):
+        """
+        Args:
+            ndisplay: 3 renders the volume, which is what the bounding cube is
+                drawn around; 2 gives the slice-by-slice view.
+        """
         self.seg_data = seg_data
         self.image_data = image_data
         self.masker = Medsam2AdaptiveBboxMasker(seg_data, bmode_image_data, model_cfg, checkpoint, device=device)
         self.n_frames = image_data.pixel_data.shape[-1]
+        self.ndisplay = ndisplay
 
     def show(self):
         result0 = self.masker.compute_frame(0)
 
-        self.viewer = napari.Viewer(title="MedSAM2 4D viewer")
+        self.viewer = napari.Viewer(title="MedSAM2 4D viewer", ndisplay=self.ndisplay)
 
         self.ceus_layer = self.viewer.add_image(
-            self.image_data.pixel_data[:, :, :, 0].T,          # (Z, Y, X)
+            self.bmode_image_data.pixel_data[:, :, :, 0].T,          # (Z, Y, X)
             name="CEUS volume",
             colormap="gray",
             blending="additive",
         )
+        # White wireframe cube around the ultrasound field. This outlines the
+        # full volume extent, not the scan sector inside it. points=False drops
+        # the corner markers so only the lines show.
+        self.ceus_layer.bounding_box.visible = True
+        self.ceus_layer.bounding_box.line_color = "white"
+        self.ceus_layer.bounding_box.line_thickness = 1.5
+        self.ceus_layer.bounding_box.points = False
+
+        self.viewer.axes.visible = True
+        self.viewer.axes.labels = True
+        self.viewer.axes.colored = False
+        self.viewer.dims.axis_labels = ["Elevation (Z)", "Depth (Y)", "Lateral (X)"]
+
         self.viewer.add_labels(
             self.seg_data.seg_mask.T.astype(np.uint8),          # static — no motion compensation
             name="Original mask (no MC)",

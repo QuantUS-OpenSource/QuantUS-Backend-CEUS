@@ -13,6 +13,22 @@ from collections import Counter
 import cv2
 from tqdm import tqdm
 
+from .motion_compensation_3d_gpu import GPU_AVAILABLE, compute_ncc_map_gpu
+
+
+def compute_sector_mask(bmode: np.ndarray, frame_idx: int = 0) -> np.ndarray:
+    """Boolean mask of the imaged sector, True where the scan has data.
+
+    A sector scan fills only part of its array; the rest is padding. Derive this
+    from the B-mode, never from the contrast volume -- unenhanced tissue is
+    legitimately zero in CEUS, so thresholding CEUS would throw away exactly the
+    voxels perfusion analysis needs. The sector is fixed by probe geometry, so
+    one frame describes the whole cine.
+    """
+    vol = bmode[..., frame_idx] if bmode.ndim == 4 else bmode
+    return np.asarray(vol) > 0
+
+
 @dataclass
 class MotionCompensationResult:
     """Store motion compensation results efficiently"""
@@ -21,20 +37,41 @@ class MotionCompensationResult:
     correlations: np.ndarray
     reference_bbox: 'BoundingBox3D'
     tracked_bboxes: List['BoundingBox3D']
+    # Imaged sector (see compute_sector_mask). VOI shifted outside it is dropped
+    # by apply_to_mask. None means no sector clipping, which is only right when
+    # the scan fills its whole array.
+    sector_mask: Optional[np.ndarray] = None
     
     def get_translation(self, frame_idx: int) -> Tuple[float, float, float]:
         return tuple(self.translation_vectors[frame_idx])
     
-    def apply_to_mask(self, mask_3d: np.ndarray, frame_idx: int, order: int = 0) -> np.ndarray:
+    def apply_to_mask(self, mask_3d: np.ndarray, frame_idx: int, order: int = 0,
+                      valid: Optional[np.ndarray] = None) -> np.ndarray:
+        """Translate mask_3d onto frame_idx.
+
+        Shifting alone only drops VOI that leaves the *array*. In a sector scan
+        the imaged region is much smaller than the array, so a VOI can travel a
+        long way out of the imaged sector while every voxel stays in bounds and
+        nothing is dropped. `valid` -- a boolean array, True where this frame has
+        image data -- drops that part too; it defaults to self.sector_mask.
+        """
         dx, dy, dz = self.get_translation(frame_idx)
-        return shift(mask_3d, shift=[dx, dy, dz], order=order, cval=0,
+        shifted = shift(mask_3d, shift=[dx, dy, dz], order=order, cval=0,
                     prefilter=True if order > 0 else False)
+        if valid is None:
+            valid = self.sector_mask
+        if valid is not None:
+            shifted = np.where(valid, shifted, 0).astype(mask_3d.dtype)
+        return shifted
     
-    def apply_to_all_frames(self, mask_3d: np.ndarray, order: int = 0) -> np.ndarray:
+    def apply_to_all_frames(self, mask_3d: np.ndarray, order: int = 0,
+                            valid_4d: Optional[np.ndarray] = None) -> np.ndarray:
+        """As apply_to_mask, over every frame. valid_4d is indexed [..., frame]."""
         n_frames = len(self.translation_vectors)
         mc_mask_4d = np.zeros((*mask_3d.shape, n_frames), dtype=mask_3d.dtype)
         for frame_idx in range(n_frames):
-            mc_mask_4d[..., frame_idx] = self.apply_to_mask(mask_3d, frame_idx, order)
+            valid = None if valid_4d is None else valid_4d[..., frame_idx]
+            mc_mask_4d[..., frame_idx] = self.apply_to_mask(mask_3d, frame_idx, order, valid)
         return mc_mask_4d
 
 @dataclass
@@ -122,25 +159,35 @@ class MotionCompensation3D:
     
     def __init__(
         self,
-        search_margin_ratio: float = 0.5 / 30,
+        search_margin: Tuple[int, int, int] = (5, 5, 5),
         use_reference_only: bool = False,  # ← NEW PARAMETER
-        n_splits: Tuple[int, int, int] = (3, 3, 2)
+        n_splits: Tuple[int, int, int] = (3, 3, 2),
+        use_gpu: bool = True
     ):
         """
         Args:
-            search_margin_ratio: Search margin as ratio of volume dimensions
+            search_margin: Per-axis (X, Y, Z) search margin in voxels. The search
+                      window is centered on the previous frame's tracked position,
+                      so this is the largest per-frame displacement that can be
+                      found on each axis; motion beyond it pins the correlation
+                      peak against the window edge and the track stalls. Size the
+                      elevational (Z) entry from expected out-of-plane motion --
+                      it is independent of the other two.
             use_reference_only: If True, always track from reference frame only
                                If False, use ILSA (compare reference vs previous)
             n_splits: Default (X, Y, Z) grid used by track_motion_blockwise_3d
                       to split a large ROI into smaller, independently
                       trackable sub-blocks
+            use_gpu: Run the 3D correlation on the GPU via CuPy. Ignored (with
+                     a warning) when CuPy or a CUDA device isn't available.
         """
-        self.search_margin_ratio = search_margin_ratio
+        self.search_margin = tuple(int(m) for m in search_margin)
         self.use_reference_only = use_reference_only
         self.n_splits = n_splits
-
-    def compute_search_margin(self, volume_shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        return tuple(int(self.search_margin_ratio * x) for x in volume_shape)
+        self.use_gpu = use_gpu and GPU_AVAILABLE
+        if use_gpu and not GPU_AVAILABLE:
+            print("Warning: use_gpu requested but CuPy/CUDA unavailable, "
+                  "falling back to CPU correlation")
 
     def split_into_blocks(
         self,
@@ -183,6 +230,12 @@ class MotionCompensation3D:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Vectorized 3D correlation computation"""
         n_frames = volumes.shape[-1]
+
+        if self.use_gpu:
+            search_region = search_bbox.extract_from_volume(volumes[..., 0])
+            correlation_map = compute_ncc_map_gpu(search_region, reference_voi)
+            return correlation_map, np.max(correlation_map.reshape(n_frames, -1), axis=1)
+
         ref_shape = reference_voi.shape
         ref_normalized = self.normalize_volume(reference_voi)
         
@@ -251,7 +304,7 @@ class MotionCompensation3D:
         # Apply image enhancement
         ref_voi = reference_bbox.extract_from_volume(ref_img)
 
-        search_margin = self.compute_search_margin(volume_shape)
+        search_margin = self.search_margin
 
         tracked_bboxes = [None] * n_frames
         correlations = [0.0] * n_frames
@@ -374,7 +427,7 @@ class MotionCompensation3D:
         reference_bbox: BoundingBox3D,
         n_splits: Optional[Tuple[int, int, int]] = None,
         min_correlation: float = 0.5
-    ) -> Tuple[List[BoundingBox3D], List[float]]:
+    ) -> Tuple[List[BoundingBox3D], List[float], List[Tuple[int, int, int]]]:
         """
         Track motion by tiling the ROI into a grid of smaller sub-blocks,
         tracking each independently, and averaging the reliable blocks'
@@ -402,6 +455,11 @@ class MotionCompensation3D:
                             averaged shift, clipped to the image bounds
             correlations: mean correlation of the contributing blocks per
                           frame (0.0 for a frame that had to carry over)
+            translations: the per-frame (dx, dy, dz) shift itself, unclipped.
+                          Use this rather than differencing tracked_bboxes'
+                          centers: clipping a ROI that runs past the volume
+                          edge truncates it on one side only, pulling its
+                          center back in and damping the apparent motion.
         """
         volume_shape = volumes.shape[:-1]
         n_frames = volumes.shape[-1]
@@ -412,6 +470,8 @@ class MotionCompensation3D:
             blocks = [reference_bbox]
 
         print(f"\n=== Block-wise Tracking ({len(blocks)} blocks, n_splits={n_splits}) ===")
+        print(f"Search margin: +/-{self.search_margin} voxels per frame "
+              f"(a block whose true motion exceeds this cannot be found)")
 
         block_results = []
         for block in tqdm(blocks, desc="Tracking blocks", unit="block"):
@@ -484,4 +544,4 @@ class MotionCompensation3D:
         print(f"Mean correlation: {np.mean(correlations):.3f}")
         print(f"Min correlation: {np.min(correlations):.3f}")
 
-        return tracked_bboxes, correlations
+        return tracked_bboxes, correlations, deltas_per_frame

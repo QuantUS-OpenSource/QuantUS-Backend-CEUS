@@ -103,10 +103,8 @@ def _shift_mask(
     Uses ``np.roll`` followed by zeroing out the wrapped-around border so
     that voxels that roll past an edge are *not* included.
 
-    The axis mapping follows the paramap convention:
-        - dy → axis 0 (sagittal)
-        - dz → axis 1 (coronal)
-        - dx → axis 2 (axial)
+    Component i shifts axis i, matching translation_vectors and
+    MotionCompensationResult.apply_to_mask.
 
     Parameters
     ----------
@@ -122,29 +120,13 @@ def _shift_mask(
     """
     shifted = static_mask.copy()
 
-    # Shift along sagittal (axis 0) by dy
-    if dy != 0:
-        shifted = np.roll(shifted, dy, axis=0)
-        if dy > 0:
-            shifted[:dy, :, :] = False
-        else:
-            shifted[dy:, :, :] = False
-
-    # Shift along coronal (axis 1) by dz
-    if dz != 0:
-        shifted = np.roll(shifted, dz, axis=1)
-        if dz > 0:
-            shifted[:, :dz, :] = False
-        else:
-            shifted[:, dz:, :] = False
-
-    # Shift along axial (axis 2) by dx
-    if dx != 0:
-        shifted = np.roll(shifted, dx, axis=2)
-        if dx > 0:
-            shifted[:, :, :dx] = False
-        else:
-            shifted[:, :, dx:] = False
+    for axis, delta in enumerate((dx, dy, dz)):
+        if delta == 0:
+            continue
+        shifted = np.roll(shifted, delta, axis=axis)
+        edge = [slice(None)] * shifted.ndim
+        edge[axis] = slice(None, delta) if delta > 0 else slice(delta, None)
+        shifted[tuple(edge)] = False
 
     return shifted
 
@@ -203,6 +185,9 @@ def generate_t0_map_3d(
             dx, dy, dz = seg_data.motion_compensation.get_translation(i)
             dx, dy, dz = int(round(dx)), int(round(dy)), int(round(dz))
             frame_mask = _shift_mask(static_mask, dx, dy, dz)
+            sector = seg_data.motion_compensation.sector_mask
+            if sector is not None:
+                frame_mask = frame_mask & sector
         else:
             frame_mask = _shift_mask(static_mask, 0, 0, 0)
 
