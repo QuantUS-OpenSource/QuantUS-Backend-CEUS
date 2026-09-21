@@ -902,7 +902,7 @@ def plot_2d_overlay(case_dir, rows, modality="bmode", enhance=True, ncols=5,
         ax.axis("off")
 
     fig.legend(handles=[
-        plt.Line2D([], [], color="red", lw=2.4, label="ground truth"),
+        plt.Line2D([], [], color="red", lw=1.2, label="ground truth"),
         plt.Line2D([], [], color="lime", lw=1.2, ls="--", label="MedSAM2 prediction"),
     ], loc="lower center", ncol=2, frameon=False, fontsize=9)
 
