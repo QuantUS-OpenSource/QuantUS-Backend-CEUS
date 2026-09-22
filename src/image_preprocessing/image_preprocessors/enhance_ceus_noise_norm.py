@@ -2,26 +2,20 @@ import numpy as np
 from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
 
-@required_kwargs('n_ref_frames', 'noise_std_multiplier')
-def compute_ceus_noise_floor(image_data: UltrasoundImage, **kwargs) -> float:
+def _compute_ceus_noise_floor(image_data: UltrasoundImage, 
+                              n_ref_frames: int, 
+                              noise_std_multiplier: float) -> float:
     """
     Compute the noise floor (p_low scalar) from pre-contrast frames of a 4D CEUS scan.
     Returns the noise floor value as a float.
-
-    Kwargs:
-        n_ref_frames (int): Number of pre-contrast frames for noise estimation.
-        noise_std_multiplier (float): Multiplier k for noise std.
     """
-    n_ref_frames = int(kwargs.get('n_ref_frames', 10))
-    noise_std_multiplier = float(kwargs.get('noise_std_multiplier', 1.0))
-
     pixel_data = image_data.pixel_data
     if pixel_data.ndim != 4:
         raise ValueError("compute_ceus_noise_floor expects 4D data (H x W x Z x T).")
 
     n_frames = pixel_data.shape[-1]
-    if n_ref_frames >= n_frames:
-        raise ValueError(f"n_ref_frames ({n_ref_frames}) must be less than total frames ({n_frames}).")
+    if n_ref_frames >= n_frames or n_ref_frames <= 0:
+        raise ValueError(f"n_ref_frames ({n_ref_frames}) must be less than total frames ({n_frames}) and greater than 0.")
 
     ref_frames = pixel_data[..., :n_ref_frames]
     ref_nonzero = ref_frames[ref_frames != 0]
@@ -33,21 +27,25 @@ def compute_ceus_noise_floor(image_data: UltrasoundImage, **kwargs) -> float:
     return float(noise_mean + noise_std_multiplier * noise_std)
 
 
-@required_kwargs('p_low', 'p_high_percentile')
+@required_kwargs('n_ref_frames', 'noise_std_multiplier', 'p_high_percentile')
 def enhance_ceus_noise_norm(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:
     """
-    Normalize a single 3D frame (H x W x Z x 1) using a precomputed noise floor.
+    Normalize 3D frames (H x W x Z x T) using a precomputed noise floor.
 
     Kwargs:
-        p_low (float): Precomputed noise floor value from compute_ceus_noise_floor.
+        n_ref_frames (int): Number of pre-contrast frames for noise estimation.
+        noise_std_multiplier (float): Multiplier k for noise std.
         p_high_percentile (float): Percentile for signal ceiling on non-zero pixels.
     """
-    p_low = float(kwargs.get('p_low', 0.0))
+    n_ref_frames = int(kwargs.get('n_ref_frames', 10))
+    noise_std_multiplier = float(kwargs.get('noise_std_multiplier', 1.0))
     p_high_percentile = float(kwargs.get('p_high_percentile', 99.5))
 
-    pixel_data = image_data.pixel_data  # H x W x Z x 1
+    p_low = _compute_ceus_noise_floor(image_data, n_ref_frames, noise_std_multiplier)
+
+    pixel_data = image_data.pixel_data  # H x W x Z x T
     if pixel_data.ndim != 4:
-        raise ValueError("enhance_ceus_noise_norm expects 4D data (H x W x Z x 1).")
+        raise ValueError("enhance_ceus_noise_norm expects 4D data (H x W x Z x T).")
 
     enhanced = np.zeros_like(pixel_data, dtype=np.uint8)
     for t in range(pixel_data.shape[-1]):

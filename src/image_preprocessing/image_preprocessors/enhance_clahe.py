@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 
-from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
+from ..decorators import required_kwargs
 
 @required_kwargs('clip_limit', 'tile_grid_size')
 def enhance_clahe(image_data: UltrasoundImage, **kwargs) -> UltrasoundImage:

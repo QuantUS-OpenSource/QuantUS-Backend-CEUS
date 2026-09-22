@@ -1,7 +1,7 @@
 import numpy as np
 
-from ..decorators import required_kwargs
 from ...data_objs.image import UltrasoundImage
+from ..decorators import required_kwargs
 from .resample import resample
 
 @required_kwargs('scale_factor', 'interp')
