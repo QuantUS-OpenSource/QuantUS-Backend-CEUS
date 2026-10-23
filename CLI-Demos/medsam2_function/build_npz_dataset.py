@@ -32,6 +32,14 @@ because medsam2_gt_eval.discover_cases derives its split tiers from which .npz
 files exist in npz_train/ -- that folder is the record of what the trainer saw,
 and keeping it literal keeps the evaluation honest.
 
+K-fold cross-validation: --kfold N --kfold-root DIR builds N leave-subjects-out
+folds, each a self-contained {DIR}/fold_{k}/npz_train + npz_holdout pair, plus
+{DIR}/kfold_split.json recording who is in which fold. Labeled subjects are
+sorted and dealt round-robin into the folds (10 subjects, 5 folds -> subjects
+1+6, 2+7, 3+8, 4+9, 5+10), so a subject is held out in exactly one fold and
+never shares a fold-train set with its own sequences. Point the trainer's
+`dataset.folder` at fold_k/npz_train and evaluate on fold_k/npz_holdout.
+
 Usage:
     python build_npz_dataset.py \\
         --processed-root /media/ahmed-el-kaffas/20TB-HDD/Yuanshan/3DMPUS/MedSAM2_finetune_data/processed \\
@@ -44,6 +52,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 
 import nibabel as nib
@@ -215,10 +224,81 @@ def build_dataset(processed_root, output_dir, holdout_dir=None, holdout_subjects
     return converted, skipped
 
 
+def build_kfold(processed_root, kfold_root, n_folds):
+    """
+    Build n_folds leave-subjects-out folds under kfold_root. Each labeled case
+    is converted once (into kfold_root/_all) and hard-linked (copied if linking
+    fails) into every fold, into npz_holdout for its subject's fold and
+    npz_train for the others.
+    """
+    cases = {}   # subject_id -> [case_name, ...] for labeled cases only
+    for seq_dir in sorted(glob.glob(os.path.join(processed_root, "subject_*", "sequence_*"))):
+        if find_mask_path(os.path.join(seq_dir, "segmentations")) is None:
+            continue
+        subject_id = os.path.basename(os.path.dirname(seq_dir))
+        cases.setdefault(subject_id, []).append(f"{subject_id}_{os.path.basename(seq_dir)}")
+
+    subjects = sorted(cases)
+    if len(subjects) < n_folds:
+        raise ValueError(f"{len(subjects)} labeled subject(s) cannot fill {n_folds} folds")
+    fold_subjects = [subjects[k::n_folds] for k in range(n_folds)]
+
+    all_dir = os.path.join(kfold_root, "_all")
+    os.makedirs(all_dir, exist_ok=True)
+    for subject_id in subjects:
+        for case_name in cases[subject_id]:
+            seq_dir = os.path.join(processed_root, subject_id, case_name.split("_", 2)[2])
+            shape, n_labeled = convert_case(seq_dir, os.path.join(all_dir, f"{case_name}.npz"))
+            print(f"[{case_name}] {shape[0]} slices, {n_labeled} labeled")
+
+    record = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "processed_root": os.path.abspath(processed_root),
+        "n_folds": n_folds,
+        "folds": [],
+    }
+    for k, hold_subjects in enumerate(fold_subjects):
+        fold_dir = os.path.join(kfold_root, f"fold_{k + 1}")
+        train_dir = os.path.join(fold_dir, "npz_train")
+        hold_dir = os.path.join(fold_dir, "npz_holdout")
+        for d in (train_dir, hold_dir):
+            shutil.rmtree(d, ignore_errors=True)   # never keep a stale case from an earlier build
+            os.makedirs(d)
+
+        train_cases, hold_cases = [], []
+        for subject_id in subjects:
+            held = subject_id in hold_subjects
+            dest = hold_dir if held else train_dir
+            for case_name in cases[subject_id]:
+                src = os.path.join(all_dir, f"{case_name}.npz")
+                dst = os.path.join(dest, f"{case_name}.npz")
+                try:
+                    os.link(src, dst)
+                except OSError:
+                    shutil.copy2(src, dst)
+                (hold_cases if held else train_cases).append(case_name)
+
+        record["folds"].append({
+            "fold": k + 1,
+            "train_dir": os.path.abspath(train_dir),
+            "holdout_dir": os.path.abspath(hold_dir),
+            "holdout_subjects": hold_subjects,
+            "train_cases": train_cases,
+            "holdout_cases": hold_cases,
+        })
+        print(f"fold_{k + 1}: holdout {hold_subjects} ({len(hold_cases)} cases), "
+              f"train {len(train_cases)} cases")
+
+    with open(os.path.join(kfold_root, "kfold_split.json"), "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2)
+    print(f"\nSplit recorded in {os.path.join(kfold_root, 'kfold_split.json')}")
+    return record
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--processed-root", required=True, help="Path to .../MedSAM2_finetune_data/processed")
-    parser.add_argument("--output-dir", required=True, help="Where to write the training {subject}_{sequence}.npz files")
+    parser.add_argument("--output-dir", help="Where to write the training {subject}_{sequence}.npz files")
     parser.add_argument("--holdout-dir", default=None,
                         help="Where to write held-out cases (required with --holdout-subjects)")
     parser.add_argument("--holdout-subjects", nargs="*", default=[],
@@ -229,7 +309,21 @@ if __name__ == "__main__":
                              "Everything else is held out. Use to reproduce an existing "
                              "checkpoint's training set. Mutually exclusive with "
                              "--holdout-subjects.")
+    parser.add_argument("--kfold", type=int, default=None,
+                        help="Build this many leave-subjects-out folds under --kfold-root "
+                             "instead of a single train/holdout split.")
+    parser.add_argument("--kfold-root", default=None,
+                        help="Output directory for the folds (required with --kfold).")
     args = parser.parse_args()
+    if args.kfold:
+        if not args.kfold_root:
+            parser.error("--kfold requires --kfold-root")
+        if args.holdout_subjects or args.train_cases or args.holdout_dir:
+            parser.error("--kfold cannot be combined with --holdout-*/--train-cases")
+        build_kfold(args.processed_root, args.kfold_root, args.kfold)
+        raise SystemExit
+    if not args.output_dir:
+        parser.error("--output-dir is required unless --kfold is used")
     build_dataset(args.processed_root, args.output_dir,
                   holdout_dir=args.holdout_dir,
                   holdout_subjects=args.holdout_subjects,
