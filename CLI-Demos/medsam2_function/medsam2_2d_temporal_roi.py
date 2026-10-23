@@ -68,7 +68,7 @@ from IPython.display import display
 from matplotlib.path import Path as MplPath
 from scipy.interpolate import splev, splprep
 
-from extract_finetune_dataset import derive_native_subject_id, find_voi_file
+from case_files import derive_native_subject_id, find_voi_file
 from medsam2_viewer_base import (
     dice_score, enhance_bmode_noise, get_mask_boundary, slice_to_rgb,
 )
