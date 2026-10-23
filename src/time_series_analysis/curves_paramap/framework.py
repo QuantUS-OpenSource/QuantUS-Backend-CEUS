@@ -107,25 +107,87 @@ class CurvesParamapAnalysis(CurvesAnalysis):
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[3])), 
                                         desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[3]):
                 frame_data = self.image_data.intensities_for_analysis[:, :, :, frame]
+                
+                # Get motion vector for this frame
+                if self.seg_data.use_mc:
+                    dx, dy, dz = self.seg_data.motion_compensation.get_translation(frame_ix)
+                    dx, dy, dz = int(round(dx)), int(round(dy)), int(round(dz))
+                else:
+                    dx, dy, dz = 0, 0, 0
+                
+                # Voxels outside the imaged sector carry no signal, so exclude
+                # them from the window rather than averaging padding into it.
+                sector = (self.seg_data.motion_compensation.sector_mask
+                          if self.seg_data.use_mc else None)
+
                 for window_ix, window in enumerate(self.windows):
-                    mask = np.zeros_like(self.seg_data.seg_mask)
+                    # SHIFT window location by motion vector
                     ax_start, sag_start, cor_start, ax_end, sag_end, cor_end = window
-                    mask[sag_start:sag_end+1, 
-                            cor_start:cor_end+1, 
-                            ax_start:ax_end+1] = 1
-                    self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+
+                    # Apply motion compensation to window coordinates. The
+                    # translation's component i shifts axis i of frame_data, so
+                    # axis 0 takes dx, axis 1 dy, axis 2 dz.
+                    sag_start_shifted = sag_start + dx
+                    sag_end_shifted = sag_end + dx
+                    cor_start_shifted = cor_start + dy
+                    cor_end_shifted = cor_end + dy
+                    ax_start_shifted = ax_start + dz
+                    ax_end_shifted = ax_end + dz
+                    
+                    # Bounds checking
+                    if (0 <= sag_start_shifted < frame_data.shape[0] and sag_end_shifted <= frame_data.shape[0] and
+                        0 <= cor_start_shifted < frame_data.shape[1] and cor_end_shifted <= frame_data.shape[1] and
+                        0 <= ax_start_shifted < frame_data.shape[2] and ax_end_shifted <= frame_data.shape[2]):
+
+                        # Slice the box directly instead of allocating a full-volume mask
+                        box = (slice(sag_start_shifted, sag_end_shifted + 1),
+                               slice(cor_start_shifted, cor_end_shifted + 1),
+                               slice(ax_start_shifted, ax_end_shifted + 1))
+                        frame_slice = frame_data[box]
+                        if sector is None:
+                            mask_slice = np.ones_like(frame_slice, dtype=bool)
+                        else:
+                            # An all-False mask is passed through rather than
+                            # skipped: every window must contribute one point per
+                            # frame or its curve silently loses its time axis.
+                            mask_slice = sector[box]
+
+                        self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
+                    
         elif self.image_data.intensities_for_analysis.ndim == 3: # 2D + time
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[0])), 
                                         desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[0]):
                 frame_data = self.image_data.intensities_for_analysis[frame]
+                
+                # Get motion vector for this frame (2D case - only dx, dy)
+                if self.seg_data.use_mc:
+                    dx, dy, _ = self.seg_data.motion_compensation.get_translation(frame_ix)
+                    dx, dy = int(round(dx)), int(round(dy))
+                else:
+                    dx, dy = 0, 0
+                
                 for window_ix, window in enumerate(self.windows):
-                    mask = np.zeros_like(self.seg_data.seg_mask)
                     ax_start, sag_start, ax_end, sag_end = window
-                    mask[ax_start:ax_end+1, sag_start:sag_end+1] = 1
-                    self.extract_frame_features(frame_data, mask, frame_ix, window_ix)
+                    
+                    # Apply motion compensation to window coordinates
+                    ax_start_shifted = ax_start + dx
+                    ax_end_shifted = ax_end + dx
+                    sag_start_shifted = sag_start + dy
+                    sag_end_shifted = sag_end + dy
+                    
+                    # Bounds checking
+                    if (0 <= ax_start_shifted < frame_data.shape[0] and ax_end_shifted <= frame_data.shape[0] and
+                        0 <= sag_start_shifted < frame_data.shape[1] and sag_end_shifted <= frame_data.shape[1]):
+
+                        # Slice the box directly instead of allocating a full-volume mask
+                        frame_slice = frame_data[ax_start_shifted:ax_end_shifted+1,
+                                                  sag_start_shifted:sag_end_shifted+1]
+                        mask_slice = np.ones_like(frame_slice, dtype=bool)
+
+                        self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
         else:
             raise ValueError("Image data must be either 2D+time or 3D+time.")
-
+        
         if self.curves_output_path:
             self.save_curves()
 

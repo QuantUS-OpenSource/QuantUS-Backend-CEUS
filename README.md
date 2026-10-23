@@ -100,6 +100,20 @@ src/
 ├── entrypoints.py          # Entrypoints for individual workflow steps
 └── full_workflow.py        # CLI interfaces and entrypoints for entire workflow
 ```
+### Useful Git Commands when working with Submodule
+When you need to switch to a different branch, make sure you are under Quantus main repo and then
+
+```bash
+git checkout <branch-name>
+git submodule update --init --recursive
+```
+This should automatically link to correct submodule.
+
+If you have changes under the submodules such as /engines/ceus or /engines/qus
+```bash
+cd ./engines/<submodule-name>
+git stash
+```
 
 ### Additional documentation
 
