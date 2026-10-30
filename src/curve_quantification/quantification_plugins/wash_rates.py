@@ -7,7 +7,7 @@ from ...time_series_analysis.curves.framework import CurvesAnalysis
 from ..decorators import required_kwargs, dependencies
 from ..transforms import fit_lognormal_curve
 
-@dependencies('lognormal_fit')
+@dependencies('lognormal_fit_full')
 @required_kwargs('tic_name', 'curves_to_fit', 'n_frames_to_analyze')
 def wash_rates(analysis_objs: CurvesAnalysis, curves: Dict[str, List[float]], data_dict: dict,  **kwargs) -> None:
     """
@@ -26,7 +26,7 @@ def wash_rates(analysis_objs: CurvesAnalysis, curves: Dict[str, List[float]], da
     assert tic_name in curves, f'{tic_name} not found in curves'
     assert tic_name in fitted_curves, f'{tic_name} not found in fitted curves'
 
-    pe_ix = data_dict[f'PE_Ix_{tic_name}']
+    pe_ix = data_dict[f'PE_Ix_full_{tic_name}']
 
     for name, curve in curves.items():
         if not isinstance(curve, Iterable) or isinstance(curve, str):
