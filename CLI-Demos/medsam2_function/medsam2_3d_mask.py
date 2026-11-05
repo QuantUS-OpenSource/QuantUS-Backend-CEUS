@@ -142,8 +142,31 @@ def get_adaptive_bbox_at_z(coronal_mask, sagittal_mask, z_abs, volume_shape, pad
     return [x_min, y_min, x_max, y_max]
 
 
+def run_medsam2_in_sector(image_predictor, slice_2d, sector_2d, bbox_2d):
+    """
+    run_medsam2_2d, restricted to the imaged sector.
+
+    A tracked bbox can drift partly or wholly out of the imaged sector (the
+    zero padding around a sector scan) while staying inside the array. SAM2
+    would still segment *something* there, so: shrink the box to the sector
+    pixels it actually covers, skip the call if it covers none, and clip the
+    prediction to the sector -- the same clipping apply_to_mask gives the
+    reference mask.
+
+    sector_2d : (H, W) bool, same orientation as slice_2d
+    Returns   : (H, W) bool mask, or None if the box has no imaged pixels.
+    """
+    x_min, y_min, x_max, y_max = (max(0, int(v)) for v in bbox_2d)
+    ys, xs = np.nonzero(sector_2d[y_min:y_max, x_min:x_max])
+    if len(xs) == 0:
+        return None
+    box = [x_min + xs.min(), y_min + ys.min(), x_min + xs.max() + 1, y_min + ys.max() + 1]
+    pred = run_medsam2_2d(image_predictor, slice_2d, box)
+    return None if pred is None else pred & sector_2d
+
+
 def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4,
-                    z_mid=None, synthetic_coronal=False, inflate=1.2):
+                    z_mid=None, synthetic_coronal=False, inflate=1.2, sector=None):
     """
     Reconstruct the full 3D mask by:
       1) segmenting two guide slices with the tracked 3D bbox as the prompt,
@@ -166,15 +189,27 @@ def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4,
 
     Exactly two guide segmentations run per frame in both modes.
 
+    `sector` is the (X, Y, Z) bool imaged sector (MotionCompensationResult
+    .sector_mask). Every SAM2 call is restricted to it via
+    run_medsam2_in_sector. If None, it is derived as `volume > 0`, the same
+    rule as compute_sector_mask -- needed for MC results loaded from NIfTI,
+    which don't store a sector mask.
+
     Returns: mask_3d (X, Y, Z) uint8, same shape as `volume`.
     """
-    z_min, z_max = int(bbox.z_min), int(bbox.z_max)
+    if sector is None:
+        sector = volume > 0
+    # Clamp to the array: a negative z would silently wrap to the far end.
+    z_min = max(0, int(bbox.z_min))
+    z_max = min(volume.shape[2], int(bbox.z_max))
     mask_3d = np.zeros(volume.shape, dtype=np.uint8)           # (X, Y, Z)
+    if z_max <= z_min:
+        return mask_3d
 
     # Sagittal first: the synthetic path needs its z extent to build the ellipse.
     sagittal_slice = volume[x_mid, :, :]                       # (Y, Z)
     sagittal_bbox  = [bbox.z_min, bbox.y_min, bbox.z_max, bbox.y_max]
-    sagittal_mask  = run_medsam2_2d(image_predictor, sagittal_slice, sagittal_bbox)
+    sagittal_mask  = run_medsam2_in_sector(image_predictor, sagittal_slice, sector[x_mid, :, :], sagittal_bbox)
     if sagittal_mask is None:
         return mask_3d
 
@@ -182,7 +217,9 @@ def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4,
         z_centre = int(z_mid if z_mid is not None else (z_min + z_max) // 2)
         z_centre = int(np.clip(z_centre, z_min, max(z_min, z_max - 1)))
         axial_bbox = [bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max]
-        axial_mask = run_medsam2_2d(image_predictor, volume[:, :, z_centre].T, axial_bbox)
+        axial_mask = run_medsam2_in_sector(
+            image_predictor, volume[:, :, z_centre].T, sector[:, :, z_centre].T, axial_bbox
+        )
         if axial_mask is None:
             return mask_3d
         coronal_mask = synthetic_coronal_mask(
@@ -191,7 +228,7 @@ def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4,
     else:
         coronal_slice = volume[:, y_mid, :]                    # (X, Z)
         coronal_bbox  = [bbox.z_min, bbox.x_min, bbox.z_max, bbox.x_max]
-        coronal_mask  = run_medsam2_2d(image_predictor, coronal_slice, coronal_bbox)
+        coronal_mask  = run_medsam2_in_sector(image_predictor, coronal_slice, sector[:, y_mid, :], coronal_bbox)
 
     if coronal_mask is None:
         return mask_3d
@@ -202,7 +239,7 @@ def compute_3d_mask(image_predictor, volume, bbox, y_mid, x_mid, padding=4,
             continue
 
         axial_slice = volume[:, :, z].T                        # (Y, X)
-        pred_yx = run_medsam2_2d(image_predictor, axial_slice, adaptive_bbox)
+        pred_yx = run_medsam2_in_sector(image_predictor, axial_slice, sector[:, :, z].T, adaptive_bbox)
         if pred_yx is not None:
             mask_3d[:, :, z] = pred_yx.T                        # (Y,X) -> (X,Y)
 
@@ -252,7 +289,7 @@ class Medsam2AdaptiveBboxMasker(Medsam2SliceViewerBase):
         mask_3d = compute_3d_mask(
             self.image_predictor, volume, geom["bbox"], geom["y_mid"], geom["x_mid"],
             z_mid=geom["z_mid"], synthetic_coronal=self.synthetic_coronal,
-            inflate=self.inflate,
+            inflate=self.inflate, sector=self.seg_data.motion_compensation.sector_mask,
         )
         if self.smooth_sigma_mm:
             mask_3d = smooth_3d_mask(

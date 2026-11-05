@@ -20,6 +20,7 @@ import copy
 from types import SimpleNamespace
 
 import numpy as np
+from scipy.ndimage import shift
 from tqdm import tqdm
 
 from src.curve_quantification.transforms import bolus_lognormal
@@ -45,6 +46,43 @@ def _tic_gpu(image_data, frame, mask, **kwargs):
     m = (cp.asarray(mask).ravel() > 0).astype(cp.float64)
     n = float(cp.dot(m, m))
     return ["TIC"], [float(cp.dot(_gpu_frame[1], m)) / n if n else float("nan")]
+
+
+def cropped_masks(seg_data):
+    """
+    The no-MC and MC masks over a crop around the VOI instead of the whole volume.
+
+    Returns `(region, nomc_crop, mc_crop_for)`: `region` is a tuple of slices to apply to
+    each frame, `nomc_crop` the VOI mask inside it, `mc_crop_for(frame_ix)` the same VOI
+    shifted by that frame's translation. They equal `seg_mask` and
+    `motion_compensation.apply_to_mask(seg_mask, frame_ix, 0)` restricted to `region`
+    (the crop is the VOI's bounding box grown by the largest translation), but the shift
+    and the masked mean touch only the crop, not the whole volume.
+    """
+    mask = seg_data.seg_mask
+    mc = seg_data.motion_compensation
+    where = np.argwhere(mask > 0)
+    margin = int(np.ceil(np.abs(mc.translation_vectors).max())) + 1
+    lo = np.maximum(where.min(axis=0) - margin, 0)
+    hi = np.minimum(where.max(axis=0) + 1 + margin, mask.shape)
+    region = tuple(slice(int(a), int(b)) for a, b in zip(lo, hi))
+    nomc_crop = mask[region]
+    sector = None if mc.sector_mask is None else mc.sector_mask[region]
+
+    def mc_crop_for(frame_ix):
+        t = np.asarray(mc.get_translation(frame_ix), dtype=float)
+        if np.all(t == np.round(t)):     # whole-voxel shift: scipy's order=0 result is a plain slice copy
+            t = t.astype(int)
+            shifted = np.zeros_like(nomc_crop)
+            dst = tuple(slice(max(d, 0), n + min(d, 0)) for d, n in zip(t, nomc_crop.shape))
+            src = tuple(slice(max(-d, 0), n + min(-d, 0)) for d, n in zip(t, nomc_crop.shape))
+            if all(a.stop > a.start for a in dst):
+                shifted[dst] = nomc_crop[src]
+        else:
+            shifted = shift(nomc_crop, shift=list(t), order=0, cval=0, prefilter=False)
+        return shifted if sector is None else np.where(sector, shifted, 0).astype(nomc_crop.dtype)
+
+    return region, nomc_crop, mc_crop_for
 
 
 def make_analysis(image_data, seg_data, frames=None, use_gpu=False):
@@ -137,7 +175,7 @@ def fit_quality(analysis, quant):
     ss_tot = np.sum((tic[valid] - tic[valid].mean()) ** 2)
     tic_ok = tic[np.isfinite(tic)]
     return {
-        "r2": 1 - ss_res / (ss_tot + 1e-8),
+        "r2": 1 - ss_res / (ss_tot + 1e-8) if valid.any() else np.nan,     # failed fit: no R^2, not a perfect one
         "roughness": np.mean(np.abs(np.diff(tic_ok))),
         "snr": d["PE_full_TIC"] / (np.std(tic_ok[:5]) + 1e-8),
         "auc": d["AUC_full_TIC"], "pe": d["PE_full_TIC"], "tp": d["TP_full_TIC"],

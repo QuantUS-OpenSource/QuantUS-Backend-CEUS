@@ -6,14 +6,81 @@ Axis convention: (X, Y, Z, T) = (lateral, depth, elevational, time)
 
 import numpy as np
 from scipy.ndimage import shift
-from scipy.signal import correlate
+from scipy.fft import next_fast_len
 from typing import Tuple, List, Optional
 from dataclasses import dataclass
 from collections import Counter
-import cv2
 from tqdm import tqdm
 
-from .motion_compensation_3d_gpu import GPU_AVAILABLE, compute_ncc_map_gpu
+from .motion_compensation_3d_gpu import GPU_AVAILABLE, cp
+
+# Smallest fraction of the template's valid voxels that must overlap valid image
+# voxels for a shift to be scored. Below this, the NCC rests on too few voxels to
+# be trusted and tends to reward shifting the template out of the image.
+MIN_OVERLAP = 0.5
+
+
+def masked_ncc(search, search_mask, template, template_mask, xp=np):
+    """Valid-mode zero-mean NCC of template over search, using only voxels where
+    both masks are True at that shift (Padfield, "Masked object registration in
+    the Fourier domain", 2012).
+
+    Voxels outside the volume or the imaged sector carry no image, so a template
+    partly shifted out of the image is scored on the part still inside rather
+    than against padding. Shifts overlapping less than MIN_OVERLAP of the
+    template's valid voxels score -1.
+
+    Args:
+        search, search_mask: 3D search region and its validity mask
+        template, template_mask: 3D template and its validity mask
+        xp: array module, numpy or cupy
+
+    Returns:
+        Host array of shape search.shape - template.shape + 1, in [-1, 1].
+    """
+    corr_shape = tuple(s - t + 1 for s, t in zip(search.shape, template.shape))
+    ms = xp.asarray(search_mask, dtype=xp.float64)
+    mt = xp.asarray(template_mask, dtype=xp.float64)
+    n_template = float(mt.sum())
+    if n_template == 0 or float(ms.sum()) == 0:
+        return np.full(corr_shape, -1.0)
+
+    def standardize(v, m):
+        # Zero-mean, unit-std over the valid voxels keeps the FFT sums below
+        # well conditioned; NCC itself is invariant to this.
+        v = xp.asarray(v, dtype=xp.float64)
+        n = m.sum()
+        mean = (v * m).sum() / n
+        std = xp.sqrt((((v - mean) * m) ** 2).sum() / n)
+        return (v - mean) / xp.where(std == 0, 1, std) * m
+
+    s = standardize(search, ms)
+    t = standardize(template, mt)
+
+    # Circular correlation at an FFT size >= search shape has no wraparound
+    # over the valid region.
+    fft_shape = tuple(next_fast_len(n, real=True) for n in search.shape)
+    valid = tuple(slice(0, c) for c in corr_shape)
+    f_m, f_s, f_s2 = (xp.fft.rfftn(a, fft_shape) for a in (ms, s, s * s))
+    k_m, k_t, k_t2 = (xp.conj(xp.fft.rfftn(a, fft_shape)) for a in (mt, t, t * t))
+
+    def corr(f, k):
+        return xp.fft.irfftn(f * k, fft_shape)[valid]
+
+    n = xp.round(corr(f_m, k_m))      # overlapping valid voxels per shift
+    sum_s, sum_s2 = corr(f_s, k_m), corr(f_s2, k_m)
+    sum_t, sum_t2 = corr(f_m, k_t), corr(f_m, k_t2)
+    sum_st = corr(f_s, k_t)
+
+    n_safe = xp.maximum(n, 1)
+    num = sum_st - sum_s * sum_t / n_safe
+    var_s = xp.maximum(sum_s2 - sum_s ** 2 / n_safe, 0)
+    var_t = xp.maximum(sum_t2 - sum_t ** 2 / n_safe, 0)
+    den = xp.sqrt(var_s * var_t)
+
+    ok = (n >= MIN_OVERLAP * n_template) & (den > 1e-6 * n_safe)
+    ncc = xp.clip(xp.where(ok, num / xp.where(ok, den, 1), -1.0), -1.0, 1.0)
+    return cp.asnumpy(ncc) if xp is not np else ncc
 
 
 def compute_sector_mask(bmode: np.ndarray, frame_idx: int = 0) -> np.ndarray:
@@ -114,22 +181,35 @@ class BoundingBox3D:
             z_max = min(bounds[2], z_max)
         return BoundingBox3D(x_min, x_max, y_min, y_max, z_min, z_max)
 
-    def touches_bounds(self, bounds: Tuple[int, int, int]) -> bool:
-        """True if this box is at or beyond the image edge on any axis."""
-        return (self.x_min <= 0 or self.x_max >= bounds[0] or
-                self.y_min <= 0 or self.y_max >= bounds[1] or
-                self.z_min <= 0 or self.z_max >= bounds[2])
-
-    def clip(self, bounds: Tuple[int, int, int]) -> 'BoundingBox3D':
-        """Clamp this box to stay within [0, bounds) on every axis."""
+    def grow(self, margin: Tuple[int, int, int]) -> 'BoundingBox3D':
+        """Expand by margin on each axis with no clamping; may extend past the
+        image. Pair with extract_padded."""
         return BoundingBox3D(
-            max(0, min(self.x_min, bounds[0])), max(0, min(self.x_max, bounds[0])),
-            max(0, min(self.y_min, bounds[1])), max(0, min(self.y_max, bounds[1])),
-            max(0, min(self.z_min, bounds[2])), max(0, min(self.z_max, bounds[2])))
-    
+            self.x_min - margin[0], self.x_max + margin[0],
+            self.y_min - margin[1], self.y_max + margin[1],
+            self.z_min - margin[2], self.z_max + margin[2])
+
     def extract_from_volume(self, volume: np.ndarray) -> np.ndarray:
         return volume[self.x_min:self.x_max, self.y_min:self.y_max, self.z_min:self.z_max]
     
+    def extract_padded(self, volume: np.ndarray, valid: np.ndarray
+                       ) -> Tuple[np.ndarray, np.ndarray]:
+        """Extract this box even where it runs past the volume.
+
+        Returns (region, mask): out-of-volume voxels are 0 in region and False
+        in mask; in-volume voxels take their value from `valid`.
+        """
+        region = np.zeros(self.shape, dtype=volume.dtype)
+        mask = np.zeros(self.shape, dtype=bool)
+        lo = (self.x_min, self.y_min, self.z_min)
+        hi = (self.x_max, self.y_max, self.z_max)
+        src = tuple(slice(max(l, 0), min(h, n)) for l, h, n in zip(lo, hi, volume.shape))
+        if all(sl.stop > sl.start for sl in src):
+            dst = tuple(slice(sl.start - l, sl.stop - l) for sl, l in zip(src, lo))
+            region[dst] = volume[src]
+            mask[dst] = valid[src]
+        return region, mask
+
     def translate(self, dx: int, dy: int, dz: int) -> 'BoundingBox3D':
         return BoundingBox3D(
             self.x_min + dx, self.x_max + dx,
@@ -161,7 +241,6 @@ class MotionCompensation3D:
         self,
         search_margin: Tuple[int, int, int] = (5, 5, 5),
         use_reference_only: bool = False,  # ← NEW PARAMETER
-        n_splits: Tuple[int, int, int] = (3, 3, 2),
         use_gpu: bool = True
     ):
         """
@@ -175,92 +254,28 @@ class MotionCompensation3D:
                       it is independent of the other two.
             use_reference_only: If True, always track from reference frame only
                                If False, use ILSA (compare reference vs previous)
-            n_splits: Default (X, Y, Z) grid used by track_motion_blockwise_3d
-                      to split a large ROI into smaller, independently
-                      trackable sub-blocks
             use_gpu: Run the 3D correlation on the GPU via CuPy. Ignored (with
                      a warning) when CuPy or a CUDA device isn't available.
         """
         self.search_margin = tuple(int(m) for m in search_margin)
         self.use_reference_only = use_reference_only
-        self.n_splits = n_splits
         self.use_gpu = use_gpu and GPU_AVAILABLE
         if use_gpu and not GPU_AVAILABLE:
             print("Warning: use_gpu requested but CuPy/CUDA unavailable, "
                   "falling back to CPU correlation")
 
-    def split_into_blocks(
+    def compute_masked_ncc(
         self,
-        bbox: BoundingBox3D,
-        n_splits: Tuple[int, int, int]
-    ) -> List[BoundingBox3D]:
-        """Tile bbox into an n_splits[0] x n_splits[1] x n_splits[2] grid of
-        smaller, non-overlapping sub-boxes covering it exactly."""
-        edges = [
-            np.linspace(mn, mx, n + 1)
-            for mn, mx, n in zip(
-                (bbox.x_min, bbox.y_min, bbox.z_min),
-                (bbox.x_max, bbox.y_max, bbox.z_max),
-                n_splits
-            )
-        ]
-        blocks = []
-        for i in range(n_splits[0]):
-            x0, x1 = int(round(edges[0][i])), int(round(edges[0][i + 1]))
-            for j in range(n_splits[1]):
-                y0, y1 = int(round(edges[1][j])), int(round(edges[1][j + 1]))
-                for k in range(n_splits[2]):
-                    z0, z1 = int(round(edges[2][k])), int(round(edges[2][k + 1]))
-                    if x1 > x0 and y1 > y0 and z1 > z0:
-                        blocks.append(BoundingBox3D(x0, x1, y0, y1, z0, z1))
-        return blocks
-    
-    def normalize_volume(self, volume: np.ndarray) -> np.ndarray:
-        mean = np.mean(volume)
-        std = np.std(volume)
-        if std == 0:
-            return volume - mean
-        return (volume - mean) / std
-       
-    def compute_3d_correlation_vectorized(
-        self,
-        volumes: np.ndarray,
-        reference_voi: np.ndarray,
-        search_bbox: BoundingBox3D
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Vectorized 3D correlation computation"""
-        n_frames = volumes.shape[-1]
+        search_region: np.ndarray,
+        search_mask: np.ndarray,
+        template: np.ndarray,
+        template_mask: np.ndarray
+    ) -> Tuple[np.ndarray, float]:
+        """Masked NCC map of template over search_region and its peak value."""
+        xp = cp if self.use_gpu else np
+        correlation_map = masked_ncc(search_region, search_mask, template, template_mask, xp)
+        return correlation_map, float(correlation_map.max())
 
-        if self.use_gpu:
-            search_region = search_bbox.extract_from_volume(volumes[..., 0])
-            correlation_map = compute_ncc_map_gpu(search_region, reference_voi)
-            return correlation_map, np.max(correlation_map.reshape(n_frames, -1), axis=1)
-
-        ref_shape = reference_voi.shape
-        ref_normalized = self.normalize_volume(reference_voi)
-        
-        search_shape = search_bbox.shape
-        corr_shape = tuple(s - r + 1 for s, r in zip(search_shape, ref_shape))
-        correlation_map = np.zeros((n_frames, *corr_shape))
-        
-        search_region = search_bbox.extract_from_volume(volumes[..., 0])
-        search_normalized = self.normalize_volume(search_region)
-        
-        correlation = correlate(search_normalized, ref_normalized, mode='valid', method='fft')
-        
-        ref_sum_sq = np.sum(ref_normalized ** 2)
-        search_sq = search_normalized ** 2
-        kernel = np.ones(ref_shape)
-        local_sum_sq = correlate(search_sq, kernel, mode='valid', method='fft')
-        
-        denominator = np.sqrt(ref_sum_sq * local_sum_sq)
-        denominator = np.where(denominator == 0, 1e-10, denominator)
-        
-        correlation_map = correlation / denominator
-        max_correlations = np.max(correlation_map.reshape(n_frames, -1), axis=1)
-        
-        return correlation_map, max_correlations
-    
     def find_optimal_translation(
         self,
         correlation_map: np.ndarray,
@@ -290,8 +305,7 @@ class MotionCompensation3D:
             volumes: All volume frames (X, Y, Z, T), lateral, depth, elevational, time
             reference_frame_idx: Index of reference frame
             reference_bbox: Bounding box around lesion in reference frame
-            verbose: Print progress/summary output (set False for per-block
-                     sub-calls from track_motion_blockwise_3d)
+            verbose: Print progress/summary output
 
         Returns:
             tracked_bboxes: List of bounding boxes for each frame
@@ -299,10 +313,11 @@ class MotionCompensation3D:
         """
         n_frames = volumes.shape[-1]
         ref_img = volumes[..., reference_frame_idx]
-        volume_shape = volumes.shape[:-1]
 
-        # Apply image enhancement
-        ref_voi = reference_bbox.extract_from_volume(ref_img)
+        # Imaged sector; voxels outside it (or outside the volume) never count
+        # toward the NCC
+        sector = compute_sector_mask(volumes, reference_frame_idx)
+        ref_voi, ref_mask = reference_bbox.extract_padded(ref_img, sector)
 
         search_margin = self.search_margin
 
@@ -330,13 +345,14 @@ class MotionCompensation3D:
 
         for frame_idx in forward_frames:
             prev_bbox = tracked_bboxes[frame_idx - 1]
-            search_bbox = prev_bbox.expand(search_margin, volume_shape)
+            # Not clamped to the volume: masked NCC scores a template partly
+            # outside the image on the part still inside
+            search_bbox = prev_bbox.grow(search_margin)
+            search_region, search_mask = search_bbox.extract_padded(
+                volumes[..., frame_idx], sector)
 
-            image_analysis = volumes[..., frame_idx]
-            final_image = image_analysis[..., np.newaxis]
-
-            corr_map_ref, max_corr_ref = self.compute_3d_correlation_vectorized(
-                final_image, ref_voi, search_bbox
+            corr_map_ref, max_corr_ref = self.compute_masked_ncc(
+                search_region, search_mask, ref_voi, ref_mask
             )
 
             if self.use_reference_only:
@@ -344,27 +360,28 @@ class MotionCompensation3D:
                     corr_map_ref, search_bbox, reference_bbox
                 )
                 tracked_bboxes[frame_idx] = reference_bbox.translate(dx, dy, dz)
-                correlations[frame_idx] = max_corr_ref[0]
+                correlations[frame_idx] = max_corr_ref
                 tracking_sources[frame_idx] = 'reference_only'
             else:
-                prev_voi = prev_bbox.extract_from_volume(volumes[..., frame_idx - 1])
-                corr_map_prev, max_corr_prev = self.compute_3d_correlation_vectorized(
-                    final_image, prev_voi, search_bbox
+                prev_voi, prev_mask = prev_bbox.extract_padded(
+                    volumes[..., frame_idx - 1], sector)
+                corr_map_prev, max_corr_prev = self.compute_masked_ncc(
+                    search_region, search_mask, prev_voi, prev_mask
                 )
 
-                if max_corr_ref[0] >= max_corr_prev[0]:
+                if max_corr_ref >= max_corr_prev:
                     dx, dy, dz = self.find_optimal_translation(
                         corr_map_ref, search_bbox, reference_bbox
                     )
                     tracked_bboxes[frame_idx] = reference_bbox.translate(dx, dy, dz)
-                    correlations[frame_idx] = max_corr_ref[0]
+                    correlations[frame_idx] = max_corr_ref
                     tracking_sources[frame_idx] = 'reference'
                 else:
                     dx, dy, dz = self.find_optimal_translation(
                         corr_map_prev, search_bbox, prev_bbox
                     )
                     tracked_bboxes[frame_idx] = prev_bbox.translate(dx, dy, dz)
-                    correlations[frame_idx] = max_corr_prev[0]
+                    correlations[frame_idx] = max_corr_prev
                     tracking_sources[frame_idx] = 'previous'
 
         # === BACKWARD TRACKING ===
@@ -373,13 +390,14 @@ class MotionCompensation3D:
 
         for frame_idx in backward_frames:
             next_bbox = tracked_bboxes[frame_idx + 1]
-            search_bbox = next_bbox.expand(search_margin, volume_shape)
+            # Not clamped to the volume: masked NCC scores a template partly
+            # outside the image on the part still inside
+            search_bbox = next_bbox.grow(search_margin)
+            search_region, search_mask = search_bbox.extract_padded(
+                volumes[..., frame_idx], sector)
 
-            image_analysis = volumes[..., frame_idx]
-            final_image = image_analysis[..., np.newaxis]
-
-            corr_map_ref, max_corr_ref = self.compute_3d_correlation_vectorized(
-                final_image, ref_voi, search_bbox
+            corr_map_ref, max_corr_ref = self.compute_masked_ncc(
+                search_region, search_mask, ref_voi, ref_mask
             )
 
             if self.use_reference_only:
@@ -387,27 +405,28 @@ class MotionCompensation3D:
                     corr_map_ref, search_bbox, reference_bbox
                 )
                 tracked_bboxes[frame_idx] = reference_bbox.translate(dx, dy, dz)
-                correlations[frame_idx] = max_corr_ref[0]
+                correlations[frame_idx] = max_corr_ref
                 tracking_sources[frame_idx] = 'reference_only'
             else:
-                next_voi = next_bbox.extract_from_volume(volumes[..., frame_idx + 1])
-                corr_map_next, max_corr_next = self.compute_3d_correlation_vectorized(
-                    final_image, next_voi, search_bbox
+                next_voi, next_mask = next_bbox.extract_padded(
+                    volumes[..., frame_idx + 1], sector)
+                corr_map_next, max_corr_next = self.compute_masked_ncc(
+                    search_region, search_mask, next_voi, next_mask
                 )
 
-                if max_corr_ref[0] >= max_corr_next[0]:
+                if max_corr_ref >= max_corr_next:
                     dx, dy, dz = self.find_optimal_translation(
                         corr_map_ref, search_bbox, reference_bbox
                     )
                     tracked_bboxes[frame_idx] = reference_bbox.translate(dx, dy, dz)
-                    correlations[frame_idx] = max_corr_ref[0]
+                    correlations[frame_idx] = max_corr_ref
                     tracking_sources[frame_idx] = 'reference'
                 else:
                     dx, dy, dz = self.find_optimal_translation(
                         corr_map_next, search_bbox, next_bbox
                     )
                     tracked_bboxes[frame_idx] = next_bbox.translate(dx, dy, dz)
-                    correlations[frame_idx] = max_corr_next[0]
+                    correlations[frame_idx] = max_corr_next
                     tracking_sources[frame_idx] = 'previous'
 
         # === PRINT STATS ===
@@ -419,129 +438,3 @@ class MotionCompensation3D:
             print(f"Min correlation: {np.min(correlations):.3f}")
 
         return tracked_bboxes, correlations
-
-    def track_motion_blockwise_3d(
-        self,
-        volumes: np.ndarray,
-        reference_frame_idx: int,
-        reference_bbox: BoundingBox3D,
-        n_splits: Optional[Tuple[int, int, int]] = None,
-        min_correlation: float = 0.5
-    ) -> Tuple[List[BoundingBox3D], List[float], List[Tuple[int, int, int]]]:
-        """
-        Track motion by tiling the ROI into a grid of smaller sub-blocks,
-        tracking each independently, and averaging the reliable blocks'
-        translations into a single rigid shift for the whole ROI.
-
-        A single large ROI can leave no room to search once the search
-        window is kept inside the image (see BoundingBox3D.expand), and
-        out-of-plane motion can make part of the ROI's content vanish from
-        the frame entirely. Smaller sub-blocks are individually small enough
-        to have search room.
-
-        Reliability is judged per frame, not per block: at each frame, a
-        block only votes if its track hasn't reached the image edge *at
-        that frame* and its correlation *at that frame* clears
-        min_correlation. A block that drifts out of bounds or loses its
-        feature for part of the sequence still contributes wherever it's
-        reliable, instead of being thrown out for the whole run over one
-        bad frame. If a frame ends up with no reliable block at all, its
-        shift is carried over from the nearest already-resolved frame,
-        working outward from the reference frame (same direction as the
-        ILSA forward/backward passes).
-
-        Returns:
-            tracked_bboxes: reference_bbox translated by the per-frame
-                            averaged shift, clipped to the image bounds
-            correlations: mean correlation of the contributing blocks per
-                          frame (0.0 for a frame that had to carry over)
-            translations: the per-frame (dx, dy, dz) shift itself, unclipped.
-                          Use this rather than differencing tracked_bboxes'
-                          centers: clipping a ROI that runs past the volume
-                          edge truncates it on one side only, pulling its
-                          center back in and damping the apparent motion.
-        """
-        volume_shape = volumes.shape[:-1]
-        n_frames = volumes.shape[-1]
-        n_splits = n_splits or self.n_splits
-
-        blocks = self.split_into_blocks(reference_bbox, n_splits)
-        if not blocks:
-            blocks = [reference_bbox]
-
-        print(f"\n=== Block-wise Tracking ({len(blocks)} blocks, n_splits={n_splits}) ===")
-        print(f"Search margin: +/-{self.search_margin} voxels per frame "
-              f"(a block whose true motion exceeds this cannot be found)")
-
-        block_results = []
-        for block in tqdm(blocks, desc="Tracking blocks", unit="block"):
-            tracked, corrs = self.track_motion_ilsa_3d(
-                volumes, reference_frame_idx, block, verbose=False
-            )
-            block_results.append((block, tracked, corrs))
-
-        deltas_per_frame: List[Optional[Tuple[int, int, int]]] = [None] * n_frames
-        corr_per_frame = [0.0] * n_frames
-        n_valid_per_frame = [0] * n_frames
-
-        for frame_idx in range(n_frames):
-            deltas, weights = [], []
-            for block, tracked, corrs in block_results:
-                bbox = tracked[frame_idx]
-                if bbox.touches_bounds(volume_shape) or corrs[frame_idx] < min_correlation:
-                    continue
-                deltas.append((
-                    bbox.x_min - block.x_min,
-                    bbox.y_min - block.y_min,
-                    bbox.z_min - block.z_min
-                ))
-                weights.append(max(corrs[frame_idx], 1e-6))
-
-            n_valid_per_frame[frame_idx] = len(deltas)
-            if deltas:
-                avg = np.average(np.array(deltas, dtype=float), axis=0, weights=np.array(weights))
-                deltas_per_frame[frame_idx] = tuple(int(round(v)) for v in avg)
-                corr_per_frame[frame_idx] = float(np.mean(weights))
-
-        # The reference frame is always a 0-shift by definition even if every
-        # block happened to be excluded there (e.g. a block sitting on the
-        # image edge from the start).
-        if deltas_per_frame[reference_frame_idx] is None:
-            deltas_per_frame[reference_frame_idx] = (0, 0, 0)
-
-        # Carry frames with no reliable block over from the nearest resolved
-        # neighbor, walking outward from the reference frame.
-        n_fallback = 0
-        last = deltas_per_frame[reference_frame_idx]
-        for frame_idx in range(reference_frame_idx + 1, n_frames):
-            if deltas_per_frame[frame_idx] is None:
-                deltas_per_frame[frame_idx] = last
-                n_fallback += 1
-            else:
-                last = deltas_per_frame[frame_idx]
-        last = deltas_per_frame[reference_frame_idx]
-        for frame_idx in range(reference_frame_idx - 1, -1, -1):
-            if deltas_per_frame[frame_idx] is None:
-                deltas_per_frame[frame_idx] = last
-                n_fallback += 1
-            else:
-                last = deltas_per_frame[frame_idx]
-
-        print(f"Average {np.mean(n_valid_per_frame):.1f}/{len(blocks)} blocks contributed per "
-              f"frame (edge-touching or low-correlation blocks excluded per-frame, not globally)")
-        if n_fallback:
-            print(f"{n_fallback}/{n_frames} frames had no reliable block and used the nearest "
-                  f"resolved frame's shift instead")
-
-        tracked_bboxes = [None] * n_frames
-        correlations = [0.0] * n_frames
-        for frame_idx in range(n_frames):
-            dx, dy, dz = deltas_per_frame[frame_idx]
-            tracked_bboxes[frame_idx] = reference_bbox.translate(dx, dy, dz).clip(volume_shape)
-            correlations[frame_idx] = corr_per_frame[frame_idx]
-
-        print(f"\n=== Tracking Complete ===")
-        print(f"Mean correlation: {np.mean(correlations):.3f}")
-        print(f"Min correlation: {np.min(correlations):.3f}")
-
-        return tracked_bboxes, correlations, deltas_per_frame

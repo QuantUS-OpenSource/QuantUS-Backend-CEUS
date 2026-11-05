@@ -24,19 +24,12 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
         shift_order (int): Interpolation order for shifting (default: 0 for nearest neighbor)
         precompute_mc_mask (bool): If True, create full 4D mc_seg_mask (uses ~36 GB).
                                     If False (default), only store vectors (uses ~10 KB)
-        n_splits (Tuple[int,int,int]): ROI grid for block-wise tracking (default: (3, 3, 2)).
-                                    Large ROIs are tiled into this many sub-blocks per axis;
-                                    each is tracked independently and blocks whose track
-                                    reaches the image edge, or whose correlation is too low,
-                                    are dropped before averaging.
-        min_correlation (float): Minimum mean correlation for a sub-block to be kept (default: 0.5)
         use_gpu (bool): Run the 3D correlation on the GPU via CuPy (default: True).
                                     Falls back to CPU if CuPy/CUDA is unavailable.
-        use_reference_only (bool): If True, every frame is matched against the
-                                    reference-frame template. If False (default), ILSA also
-                                    tries the neighbouring frame's template and keeps whichever
-                                    correlates better, which tracks large cumulative motion and
-                                    gradual appearance change far better.
+        use_reference_only (bool): If True (default), every frame is matched against the
+                                    reference-frame template only. If False, ILSA also tries
+                                    the neighbouring frame's template and keeps whichever
+                                    correlates better.
 
     Returns:
         CeusSeg: Segmentation with motion compensation info stored
@@ -47,11 +40,9 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     padding = kwargs.get('padding', 5)
     shift_order = kwargs.get('shift_order', 0)  # 0=nearest neighbor for masks
     precompute_mc_mask = kwargs.get('precompute_mc_mask', False)  # Default: memory efficient
-    n_splits = kwargs.get('n_splits', (3, 3, 2))
-    min_correlation = kwargs.get('min_correlation', 0.5)
     use_gpu = kwargs.get('use_gpu', True)
     search_margin = kwargs.get('search_margin', (5, 5, 5))
-    use_reference_only = kwargs.get('use_reference_only', False)
+    use_reference_only = kwargs.get('use_reference_only', True)
     
     # Validate inputs
     if not isinstance(bmode_image_data, UltrasoundImage):
@@ -91,17 +82,25 @@ def motion_compensation_3d(image_data: UltrasoundImage, seg_data: CeusSeg, **kwa
     mc = MotionCompensation3D(
         search_margin=search_margin,
         use_reference_only=use_reference_only,
-        n_splits=n_splits,
         use_gpu=use_gpu
     )
     
     # Track motion - volumes are (X,Y,Z) - (Lateral, Depth, Elevational)
-    tracked_bboxes, correlations, translations = mc.track_motion_blockwise_3d(
+    # Track motion using ILSA (Iterative Least Squares Alignment) for better performance on large displacements
+    tracked_bboxes, correlations = mc.track_motion_ilsa_3d(
         bmode_image_data.pixel_data,
         reference_frame,
         reference_bbox,
-        min_correlation=min_correlation
+        verbose=True
     )
+    # ILSA boxes are reference_bbox.translate(...) without clipping,
+    # so the min-corner offset is exactly the shift
+    translations = [
+        (b.x_min - reference_bbox.x_min,
+         b.y_min - reference_bbox.y_min,
+         b.z_min - reference_bbox.z_min)
+        for b in tracked_bboxes
+    ]
     
     # Step 3: Calculate translation vectors (memory efficient!)
     print("\nStep 3: Computing translation vectors...")
