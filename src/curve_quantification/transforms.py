@@ -58,8 +58,8 @@ def fit_lognormal_curve(time, curve):
     tp = np.exp(mu - sigma**2)
 
     # Reject unreasonable fits
-    if tp > time[-1] or mtt > time[-1] * 2 or auc > auc_max:
-        return tuple(np.nan for _ in range(8))
+    # if tp > time[-1] or mtt > time[-1] * 2 or auc > auc_max:
+    #     return tuple(np.nan for _ in range(8))
 
     fitted_curve = bolus_lognormal(time, *params)
     pe = np.max(fitted_curve)
