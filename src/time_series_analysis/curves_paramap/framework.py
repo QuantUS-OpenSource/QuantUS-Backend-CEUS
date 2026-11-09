@@ -155,6 +155,10 @@ class CurvesParamapAnalysis(CurvesAnalysis):
                         self.extract_frame_features(frame_slice, mask_slice, frame_ix, window_ix)
                     
         elif self.image_data.intensities_for_analysis.ndim == 3: # 2D + time
+            if self.seg_data.use_mc:
+                raise NotImplementedError(
+                    "Parametric maps do not support 2D motion compensation yet; "
+                    "run TIC curves instead or load the ROI without MC.")
             for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[0])), 
                                         desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[0]):
                 frame_data = self.image_data.intensities_for_analysis[frame]

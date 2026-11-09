@@ -10,6 +10,7 @@ from ...data_objs.image import UltrasoundImage
 from ...seg_preprocessing.motion_compensation_3d import (
     BoundingBox3D, MotionCompensationResult
 )
+from ...seg_preprocessing.motion_compensation_2d import MotionCompensation2DResult
 
 @extensions(".nii", ".nii.gz")
 def nifti(image_data: UltrasoundImage, seg_path: str, **kwargs) -> CeusSeg:
@@ -37,6 +38,11 @@ def nifti(image_data: UltrasoundImage, seg_path: str, **kwargs) -> CeusSeg:
     for ext in seg.header.extensions:
         try:
             data = json.loads(ext.get_content())
+            if 'motion_compensation_2d' in data:
+                out.motion_compensation = MotionCompensation2DResult.from_dict(
+                    data['motion_compensation_2d'])
+                out.use_mc = True
+                break
             if 'motion_compensation' not in data:
                 continue
             mc = data['motion_compensation']

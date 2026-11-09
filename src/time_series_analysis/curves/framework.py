@@ -55,10 +55,20 @@ class CurvesAnalysis:
                 self.extract_frame_features(frame_data, frame_mask, frame_ix)
 
         elif len(self.image_data.intensities_for_analysis.shape) == 3: # 2D + time
-            for frame_ix, frame in tqdm(enumerate(range(self.image_data.intensities_for_analysis.shape[0])), 
-                                        desc="Computing curves", total=self.image_data.intensities_for_analysis.shape[0]):
+            mc = self.seg_data.motion_compensation if self.seg_data.use_mc else None
+            frames = range(self.image_data.intensities_for_analysis.shape[0])
+            if mc is not None:
+                # 2D motion compensation rejects out-of-plane frames; drop them
+                # from the curves and the time axis together.
+                frames = mc.kept_frames
+                self.time_arr = self.time_arr[frames]
+            for frame_ix, frame in tqdm(enumerate(frames), desc="Computing curves", total=len(frames)):
                 frame_data = self.image_data.intensities_for_analysis[frame]
-                self.extract_frame_features(frame_data, self.seg_data.seg_mask, frame_ix)
+                if mc is not None:
+                    frame_mask = mc.frame_mask(frame, frame_data.shape)
+                else:
+                    frame_mask = self.seg_data.seg_mask
+                self.extract_frame_features(frame_data, frame_mask, frame_ix)
 
         if self.curves_output_path:
             self.save_curves()
