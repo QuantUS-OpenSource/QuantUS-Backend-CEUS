@@ -36,6 +36,9 @@ class EntryClass(UltrasoundImage):
         else:
             self.pixel_data = np.asarray(img.dataobj, dtype=np.uint8)
 
+        if self.pixel_data.ndim == 3:  # single 3D volume -> add a singleton time axis
+            self.pixel_data = self.pixel_data[..., np.newaxis]
+
         self.pixdim = pixdim
         self.frame_rate = frame_rate
         self.intensities_for_analysis = self.pixel_data
